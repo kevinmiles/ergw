@@ -1,6 +1,7 @@
 sudo: required
 arch: amd64
 dist: bionic
+os: linux
 services:
   - docker
 git:
@@ -51,8 +52,13 @@ jobs:
     # - dist: xenial
     #   arch: arm64
     #   otp_release: 22.0.5
-    - stage: docker
-      otp_release: 22.3.1
+    - &docker-build
+      stage: deploy
+      language: generic
+      arch: amd64
+      os: linux
+      services:
+        - docker
       script:
         - docker build -t $BUILD_IMAGE -f docker/Dockerfile .
       after_success:
@@ -65,6 +71,8 @@ jobs:
         - docker tag $BUILD_IMAGE $BUILD_IMAGE:$TAG
         - docker push $BUILD_IMAGE:$TAG
         - echo "docker push done"
+    - <<: *docker-build
+      arch: arm64
 
 addons:
   artifacts:
