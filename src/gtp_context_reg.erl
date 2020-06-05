@@ -12,7 +12,7 @@
 -compile({parse_transform, cut}).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 -export([register/3, register_new/3, update/4, unregister/3,
 	 lookup/1, select/1,
 	 match_key/2, match_keys/2,
@@ -37,8 +37,14 @@
 %%% API
 %%%===================================================================
 
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(Partition) ->
+    %% FIXME: temp workarround, will be removed
+    case whereis(?SERVER) of
+	Pid when is_pid(Pid) ->
+	    gen_server:start_link(?MODULE, [Partition], []);
+	_ ->
+	    gen_server:start_link({local, ?SERVER}, ?MODULE, [Partition], [])
+    end.
 
 lookup(Key) when is_tuple(Key) ->
     case ets:lookup(?SERVER, Key) of
@@ -100,7 +106,7 @@ alloc_tei(Name, KeyFun)
 %%% regine callbacks
 %%%===================================================================
 
-init([]) ->
+init([_Partition]) ->
     process_flag(trap_exit, true),
 
     ets:new(?SERVER, [ordered_set, named_table, public, {keypos, 1}]),

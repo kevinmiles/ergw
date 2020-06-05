@@ -69,7 +69,7 @@ start_vnode(I) ->
 
 init([Partition]) ->
     TID = ets:new(?MODULE, [ordered_set, private, {keypos, 1}]),
-    {ok, SupRef} = gtp_context_sup_sup:new(),
+    {ok, SupRef} = gtp_context_sup_sup:new(Partition),
     State0 = #state{partition = Partition, sup = SupRef, tid = TID},
     State = State0#state{prefix = init_tei_prefix(State0)},
     {ok, State}.

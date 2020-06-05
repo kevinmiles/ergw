@@ -5,12 +5,12 @@
 %% as published by the Free Software Foundation; either version
 %% 2 of the License, or (at your option) any later version.
 
--module(gtp_context_sup).
+-module(gtp_context_mgmt_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, new/6, new/7]).
+-export([start_link/1, new/6, new/7]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -23,8 +23,8 @@
 %% API functions
 %% ===================================================================
 
-start_link() ->
-    supervisor:start_link(?MODULE, []).
+start_link(Partition) ->
+    supervisor:start_link(?MODULE, [Partition]).
 
 new(Sup, Port, TEI, Version, Interface, IfOpts) ->
     Opts = [{hibernate_after, 500},
@@ -39,12 +39,18 @@ new(Sup, Port, TEI, Version, Interface, IfOpts, Opts) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init([]) ->
-    Flags = #{strategy => simple_one_for_one, intensity => 5, period => 10},
-    Spec = #{id =>       gtp_context,
-	     start =>    {gtp_context_sup, start_link, []},
-	     restart =>  temporary,
-	     shutdown => 1000,
-	     type =>     worker,
-	     modules =>  [gtp_context]},
-    {ok, {Flags, [Spec]}}.
+init([Partition]) ->
+    Flags = #{strategy => one_for_one, intensity => 5, period => 10},
+    RegSpec = #{id =>       gtp_context_reg,
+		start =>    {gtp_context_reg, start_link, [Partition]},
+		restart =>  permanent,
+		shutdown => 1000,
+		type =>     worker,
+		modules =>  [gtp_context_reg]},
+    SupSpec = #{id =>       gtp_context_sup,
+		start =>    {gtp_context_sup, start_link, []},
+		restart =>  permanent,
+		shutdown => 1000,
+		type =>     supervisor,
+		modules =>  [gtp_context_sup]},
+    {ok, {Flags, [RegSpec, SupSpec]}}.
