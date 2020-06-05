@@ -365,7 +365,7 @@ handle_request(ReqKey,
     Context2 = update_context_from_gtp_req(Request, Context1),
     ContextPreAuth = gtp_path:bind(Request, false, Context2),
 
-    gtp_context:terminate_colliding_context(ContextPreAuth),
+    gtp_context:terminate_colliding_context(ContextPreAuth, Data),
 
     SessionOpts0 = init_session(IEs, ContextPreAuth, AAAopts),
     SessionOpts1 = init_session_from_gtp_req(IEs, AAAopts, ContextPreAuth, SessionOpts0),
@@ -384,7 +384,7 @@ handle_request(ReqKey,
 
     {Result, ActiveSessionOpts1, ContextPending1} =
 	allocate_ips(APNOpts, ActiveSessionOpts0, PAA, DAF, ContextVRF),
-    {ContextPending, ActiveSessionOpts} = 
+    {ContextPending, ActiveSessionOpts} =
 	add_apn_timeout(APNOpts, ActiveSessionOpts1, ContextPending1),
     ergw_aaa_session:set(Session, ActiveSessionOpts),
 
@@ -426,8 +426,8 @@ handle_request(ReqKey,
     PCC4 = ergw_gsn_lib:session_events_to_pcc_ctx(RfSEvs, PCC3),
 
     {Context, PCtx} =
-	ergw_gsn_lib:create_sgi_session(PendingPCtx, NodeCaps, PCC4, ContextPending),
-    gtp_context:remote_context_register_new(Context),
+	ergw_gsn_lib:create_sgi_session(PendingPCtx, NodeCaps, PCC4, ContextPending, Data),
+    gtp_context:remote_context_register_new(Context, Data),
 
     GxReport = ergw_gsn_lib:pcc_events_to_charging_rule_report(PCCErrors1 ++ PCCErrors2),
     if map_size(GxReport) /= 0 ->
@@ -467,7 +467,7 @@ handle_request(ReqKey,
     URRActions = update_session_from_gtp_req(IEs, Session, Context),
 
     Data1 = if Context /= OldContext ->
-		     gtp_context:remote_context_update(OldContext, Context),
+		     gtp_context:remote_context_update(OldContext, Context, Data0),
 		     apply_context_change(Context, OldContext, URRActions, Data0);
 		true ->
 		     trigger_defered_usage_report(URRActions, PCtx),
@@ -533,7 +533,7 @@ handle_request(ReqKey,
     NewContext = OldContext#context{
 		   remote_data_teid = undefined
 		  },
-    gtp_context:remote_context_update(OldContext, NewContext),
+    gtp_context:remote_context_update(OldContext, NewContext, Data),
     {PCtx, _} =
 	ergw_gsn_lib:modify_sgi_session(PCC, [], ModifyOpts, NewContext, PCtx0),
 

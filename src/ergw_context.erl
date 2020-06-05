@@ -27,7 +27,7 @@
     {ok, SEID :: seid(), Cause :: atom()} |
     {ok, SEID :: seid(), ResponseIEs :: map()}.
 
--callback port_message(Request :: #request{}, Msg :: #gtp{}) -> ok.
+%%-callback port_message(Request :: #request{}, Msg :: #gtp{}) -> ok.
 
 -callback port_message(Server :: pid(), Request :: #request{},
 		       Msg :: #gtp{}, Resent :: boolean()) -> ok.
@@ -45,7 +45,7 @@ port_message(Request, Msg) ->
 %% port_message/3
 port_message(Keys, #request{gtp_port = GtpPort} = Request, Msg)
   when is_list(Keys) ->
-    Contexts = gtp_context_reg:match_keys(GtpPort, Keys),
+    Contexts = gtp_global_context_reg:match_keys(GtpPort, Keys),
     port_message_ctx(Contexts, Request, Msg).
 
 %% port_message/4
@@ -59,16 +59,13 @@ port_message(Key, Request, Msg, Resent) ->
 %%%=========================================================================
 
 apply2context(Key, F, A) ->
-    case gtp_context_reg:lookup(Key) of
+    case gtp_global_context_reg:lookup(Key) of
 	{Handler, Server} when is_atom(Handler), is_pid(Server) ->
 	    apply(Handler, F, [Server | A]);
 	_Other ->
 	    ?LOG(debug, "unable to find context ~p", [Key]),
 	    {error, not_found}
     end.
-
-port_request_key(#request{key = ReqKey, gtp_port = GtpPort}) ->
-    gtp_context:port_key(GtpPort, ReqKey).
 
 %% TODO - MAYBE
 %%  it might be benificial to first perform the lookup and then enqueue
@@ -88,27 +85,6 @@ port_message_h(Request, #gtp{} = Msg) ->
 	    end;
 	{error, Reason} ->
 	    gtp_context:generic_error(Request, Msg, Reason)
-    end.
-
-port_message_run(Request, #gtp{type = g_pdu} = Msg) ->
-    port_message_p(Request, Msg);
-port_message_run(Request, Msg0) ->
-    Msg = gtp_packet:decode_ies(Msg0),
-    case port_message(port_request_key(Request), Request, Msg, true) of
-	{error, not_found} ->
-	    port_message_p(Request, Msg);
-	Result ->
-	    Result
-    end.
-
-port_message_p(#request{} = Request, #gtp{tei = 0} = Msg) ->
-    gtp_context:port_message(Request, Msg);
-port_message_p(#request{gtp_port = GtpPort} = Request, #gtp{tei = TEI} = Msg) ->
-    case port_message(gtp_context:port_teid_key(GtpPort, TEI), Request, Msg, false) of
-	{error, _} = Error ->
-	    throw(Error);
-	Result ->
-	    Result
     end.
 
 port_message_ctx([{Handler, Server} | _], Request, Msg)

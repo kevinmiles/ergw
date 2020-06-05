@@ -204,7 +204,7 @@ i(memory, context) ->
 			    Mem + M;
 		       (_, Mem) ->
 			    Mem
-		    end, 0, gtp_context_reg:all()),
+		    end, 0, gtp_global_context_reg:all()),
     {context, MemUsage}.
 
 

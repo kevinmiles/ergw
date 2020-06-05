@@ -397,7 +397,8 @@ start_session(#data{apn = APN, context = Context0, dp_node = Node,
 	ergw_gsn_lib:create_tdf_session(PendingPCtx, NodeCaps, PCC4, PendingContext),
 
     Keys = context2keys(Context),
-    gtp_context_reg:register(Keys, ?MODULE, self()),
+    %% TODO: fixme!
+    %% gtp_context_reg:register(Keys, ?MODULE, self()),
 
     GxReport = ergw_gsn_lib:pcc_events_to_charging_rule_report(PCCErrors1 ++ PCCErrors2),
     if map_size(GxReport) /= 0 ->

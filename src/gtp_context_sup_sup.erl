@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1, new/0, stop/1]).
+-export([start_link/0, new/1, stop/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -23,11 +23,11 @@
 %% API functions
 %% ===================================================================
 
-start_link(Partition) ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, [Partition]).
+start_link() ->
+    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-new() ->
-    supervisor:start_child(?SERVER, []).
+new(Partition) ->
+    supervisor:start_child(?SERVER, [Partition]).
 
 stop(Id) ->
     supervisor:terminate_child(?SERVER, Id).
@@ -36,10 +36,10 @@ stop(Id) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init([Partition]) ->
+init([]) ->
     Flags = #{strategy => simple_one_for_one, intensity => 5, period => 10},
     Spec = #{id =>       gtp_context_mgmt_sup,
-	     start =>    {gtp_context_mgmt_sup, start_link, [Partition]},
+	     start =>    {gtp_context_mgmt_sup, start_link, []},
 	     restart =>  temporary,
 	     shutdown => 1000,
 	     type =>     supervisor,

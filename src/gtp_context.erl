@@ -20,21 +20,22 @@
 	 send_request/6, resend_request/2,
 	 request_finished/1,
 	 path_restart/2,
-	 terminate_colliding_context/1, terminate_context/1,
+	 terminate_colliding_context/2, terminate_context/2,
 	 delete_context/1, trigger_delete_context/1,
-	 remote_context_register/1, remote_context_register_new/1, remote_context_update/2,
+	 remote_context_register/2, remote_context_register_new/2, remote_context_update/3,
 	 enforce_restrictions/2,
 	 info/1,
 	 validate_options/3,
 	 validate_option/2,
 	 generic_error/3,
-	 port_key/2, port_teid_key/2]).
+	 port_key/2, port_teid_key/2,
+	 register_request/4]).
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
 -export([ping/0, ping/1, ring_status/0]).
 
 %% ergw_context callbacks
--export([sx_report/2, port_message/2, port_message/4]).
+-export([sx_report/2, port_message/4]).
 
 %% gen_statem callbacks
 -export([callback_mode/0, init/1, handle_event/4,
@@ -75,35 +76,35 @@ send_request(GtpPort, DstIP, DstPort, ReqId, Msg, ReqInfo) ->
 resend_request(GtpPort, ReqId) ->
     ergw_gtp_c_socket:resend_request(GtpPort, ReqId).
 
-start_link(GtpPort, TEI, Version, Interface, IfOpts, Opts) ->
-    gen_statem:start_link(?MODULE, [GtpPort, TEI, Version, Interface, IfOpts], Opts).
+start_link(GtpPort, Registry, Version, Interface, IfOpts, Opts) ->
+    gen_statem:start_link(?MODULE, [GtpPort, Registry, Version, Interface, IfOpts], Opts).
 
 path_restart(Context, Path) ->
     jobs:run(path_restart, fun() -> gen_statem:call(Context, {path_restart, Path}) end).
 
-remote_context_register(Context)
+remote_context_register(Context, #{registry := Registry})
   when is_record(Context, context) ->
     Keys = context2keys(Context),
-    gtp_context_reg:register(Keys, ?MODULE, self()).
+    gtp_context_reg:register(Registry, Keys, ?MODULE, self()).
 
-remote_context_register_new(Context)
+remote_context_register_new(Context, #{registry := Registry})
   when is_record(Context, context) ->
     Keys = context2keys(Context),
-    case gtp_context_reg:register_new(Keys, ?MODULE, self()) of
+    case gtp_context_reg:register_new(Registry, Keys, ?MODULE, self()) of
 	ok ->
 	    ok;
 	_ ->
 	    throw(?CTX_ERR(?FATAL, system_failure, Context))
     end.
 
-remote_context_update(OldContext, NewContext)
+remote_context_update(OldContext, NewContext, #{registry := Registry})
   when is_record(OldContext, context),
        is_record(NewContext, context) ->
     OldKeys = context2keys(OldContext),
     NewKeys = context2keys(NewContext),
     Delete = ordsets:subtract(OldKeys, NewKeys),
     Insert = ordsets:subtract(NewKeys, OldKeys),
-    gtp_context_reg:update(Delete, Insert, ?MODULE, self()).
+    gtp_context_reg:update(Registry, Delete, Insert, ?MODULE, self()).
 
 delete_context(Context) ->
     gen_statem:call(Context, delete_context).
@@ -153,18 +154,19 @@ collect_charging_events(OldS, NewS, _Context) ->
 %% that when an incomming Create PDP Context/Create Session requests collides
 %% with an existing context based on a IMSI, Bearer, Protocol tuple, that the
 %% preexisting context should be deleted locally. This function does that.
-terminate_colliding_context(#context{control_port = GtpPort, context_id = Id})
+terminate_colliding_context(#context{control_port = GtpPort, context_id = Id},
+			    #{registry := Registry} = Data)
   when Id /= undefined ->
-    case gtp_context_reg:lookup(port_key(GtpPort, Id)) of
+    case gtp_context_reg:lookup(Registry, port_key(GtpPort, Id)) of
 	{?MODULE, Server} when is_pid(Server) ->
-	    gtp_context:terminate_context(Server);
+	    gtp_context:terminate_context(Server, Data);
 	_ ->
 	    ok
     end;
-terminate_colliding_context(_) ->
+terminate_colliding_context(_, _) ->
     ok.
 
-terminate_context(Context)
+terminate_context(Context, #{registry := Registry})
   when is_pid(Context) ->
     try
 	gen_statem:call(Context, terminate_context)
@@ -172,7 +174,7 @@ terminate_context(Context)
 	exit:_ ->
 	    ok
     end,
-    gtp_context_reg:await_unreg(Context).
+    gtp_context_reg:await_unreg(Registry, Context).
 
 info(Context) ->
     gen_statem:call(Context, info).
@@ -263,45 +265,9 @@ validate_aaa_attr_option(Key, Setting, Value, _Attr) ->
 sx_report(Server, Report) ->
     gen_statem:call(Server, {sx, Report}).
 
-%% TEID handling for GTPv1 is brain dead....
-port_message(Request, #gtp{version = v2, type = MsgType, tei = 0} = Msg)
-  when MsgType == change_notification_request;
-       MsgType == change_notification_response ->
-    Keys = gtp_v2_c:get_msg_keys(Msg),
-    ergw_context:port_message(Keys, Request, Msg);
-
-%% same as above for GTPv2
-port_message(Request, #gtp{version = v1, type = MsgType, tei = 0} = Msg)
-  when MsgType == ms_info_change_notification_request;
-       MsgType == ms_info_change_notification_response ->
-    Keys = gtp_v1_c:get_msg_keys(Msg),
-    ergw_context:port_message(Keys, Request, Msg);
-
-port_message(#request{gtp_port = GtpPort} = Request,
-		 #gtp{version = Version, tei = 0} = Msg) ->
-    case get_handler_if(GtpPort, Msg) of
-	{ok, Interface, InterfaceOpts} ->
-	    case ergw:get_accept_new() of
-		true -> ok;
-		_ ->
-		    throw({error, no_resources_available})
-	    end,
-	    validate_teid(Msg),
-	    Server = context_new(GtpPort, Version, Interface, InterfaceOpts),
-	    port_message(Server, Request, Msg, false);
-
-	{error, _} = Error ->
-	    throw(Error)
-    end;
-port_message(_Request, _Msg) ->
-    throw({error, not_found}).
-
 port_message(Server, Request, #gtp{type = g_pdu} = Msg, _Resent) ->
     gen_statem:cast(Server, {handle_pdu, Request, Msg});
 port_message(Server, Request, Msg, Resent) ->
-    if not Resent -> register_request(?MODULE, Server, Request);
-       true       -> ok
-    end,
     gen_statem:cast(Server, {handle_message, Request, Msg, Resent}).
 
 %%====================================================================
@@ -310,14 +276,14 @@ port_message(Server, Request, Msg, Resent) ->
 
 callback_mode() -> [handle_event_function, state_enter].
 
-init([CntlPort, Version, Interface,
+init([CntlPort, Registry, Version, Interface,
       #{node_selection := NodeSelect,
 	aaa := AAAOpts} = Opts]) ->
 
     ?LOG(debug, "init(~p)", [[CntlPort, Interface]]),
     process_flag(trap_exit, true),
 
-    {ok, CntlTEI} = gtp_context_reg:alloc_tei(CntlPort),
+    {ok, CntlTEI} = gtp_context_reg:alloc_tei(Registry, CntlPort),
 
     Context = #context{
 		 charging_identifier = ergw_gtp_c_socket:get_uniq_id(CntlPort),
@@ -332,6 +298,7 @@ init([CntlPort, Version, Interface,
       context        => Context,
       version        => Version,
       interface      => Interface,
+      registry       => Registry,
       node_selection => NodeSelect,
       aaa_opts       => AAAOpts},
 
@@ -503,8 +470,14 @@ send_response(Request, #gtp{seq_no = SeqNo} = Msg) ->
 			[Class, Error, Stack, gtp_c_lib:fmt_gtp(Msg)])
     end.
 
-request_finished(Request) ->
-    unregister_request(Request).
+register_request(Handler, Server, #request{key = ReqKey, gtp_port = GtpPort}, Registry)->
+    gtp_context_reg:register(Registry, [port_key(GtpPort, ReqKey)], Handler, Server).
+
+request_finished(#request{key = ReqKey, gtp_port = GtpPort, reg = Registry})
+  when Registry /= undefined ->
+    gtp_context_reg:unregister(Registry, [port_key(GtpPort, ReqKey)], ?MODULE, self());
+request_finished(_Request) ->
+    ok.
 
 generic_error(_Request, #gtp{type = g_pdu}, _Error) ->
     ok;
@@ -518,34 +491,10 @@ generic_error(#request{gtp_port = GtpPort} = Request,
 %%% Internal functions
 %%%===================================================================
 
-register_request(Handler, Server, #request{key = ReqKey, gtp_port = GtpPort}) ->
-    gtp_context_reg:register([port_key(GtpPort, ReqKey)], Handler, Server).
-
-unregister_request(#request{key = ReqKey, gtp_port = GtpPort}) ->
-    gtp_context_reg:unregister([port_key(GtpPort, ReqKey)], ?MODULE, self()).
-
 enforce_restriction(Context, #gtp{version = Version}, {Version, false}) ->
     throw(?CTX_ERR(?FATAL, {version_not_supported, []}, Context));
 enforce_restriction(_Context, _Msg, _Restriction) ->
     ok.
-
-get_handler_if(GtpPort, #gtp{version = v1} = Msg) ->
-    gtp_v1_c:get_handler(GtpPort, Msg);
-get_handler_if(GtpPort, #gtp{version = v2} = Msg) ->
-    gtp_v2_c:get_handler(GtpPort, Msg).
-
-context_new(GtpPort, Version, Interface, InterfaceOpts) ->
-    case gtp_context_sup:new(GtpPort, Version, Interface, InterfaceOpts) of
-	{ok, Server} when is_pid(Server) ->
-	    Server;
-	{error, Error} ->
-	    throw({error, Error})
-    end.
-
-validate_teid(#gtp{version = v1, type = MsgType, tei = TEID}) ->
-    gtp_v1_c:validate_teid(MsgType, TEID);
-validate_teid(#gtp{version = v2, type = MsgType, tei = TEID}) ->
-    gtp_v2_c:validate_teid(MsgType, TEID).
 
 validate_message(#gtp{version = Version, ie = IEs} = Msg, Data) ->
     Cause = case Version of

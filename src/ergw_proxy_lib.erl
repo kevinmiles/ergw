@@ -15,7 +15,7 @@
 	 select_gw/5,
 	 select_gtp_proxy_sockets/2,
 	 select_sx_proxy_candidate/3]).
--export([create_forward_session/3,
+-export([create_forward_session/4,
 	 modify_forward_session/5,
 	 delete_forward_session/4,
 	 query_usage_report/2]).
@@ -271,13 +271,13 @@ register_ctx_ids(#context{local_data_endp = LocalDataEndp},
 	    [ergw_pfcp:ctx_teid_key(PCtx, #fq_teid{ip = LocalDataEndp#gtp_endp.ip,
 						   teid = LocalDataEndp#gtp_endp.teid}) ||
 		is_record(LocalDataEndp, gtp_endp)]],
-    gtp_context_reg:register(Keys, gtp_context, self()).
+    gtp_global_context_reg:register(Keys, gtp_context, self()).
 
-create_forward_session(Candidates, Left0, Right0) ->
+create_forward_session(Candidates, Left0, Right0, #{registry := Registry}) ->
     {ok, PCtx0, NodeCaps} = ergw_sx_node:select_sx_node(Candidates, Left0),
-    Left = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Left0),
+    Left = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Registry, Left0),
     register_ctx_ids(Left, PCtx0),
-    Right = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Right0),
+    Right = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Registry, Right0),
     register_ctx_ids(Left, PCtx0),
 
     {ok, CntlNode, _} = ergw_sx_socket:id(),

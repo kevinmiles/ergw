@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1, new/6, new/7]).
+-export([start_link/1, new/1, stop/1, get_workers/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -26,14 +26,21 @@
 start_link(Partition) ->
     supervisor:start_link(?MODULE, [Partition]).
 
-new(Sup, Port, TEI, Version, Interface, IfOpts) ->
-    Opts = [{hibernate_after, 500},
-	    {spawn_opt,[{fullsweep_after, 0}]}],
-    new(Sup, Port, TEI, Version, Interface, IfOpts, Opts).
+new(Partition) ->
+    gtp_context_sup_sup:new(Partition).
 
-new(Sup, Port, TEI, Version, Interface, IfOpts, Opts) ->
-    ?LOG(debug, "new(~p)", [[Sup, Port, TEI, Version, Interface, IfOpts, Opts]]),
-    supervisor:start_child(Sup, [Port, TEI, Version, Interface, IfOpts, Opts]).
+stop(Id) ->
+    gtp_context_sup_sup:stop(Id).
+
+get_workers(MgmtSup) ->
+    lists:foldl(
+      fun({Id, Child, _, _}, M) when Id =:= gtp_context_reg ->
+	      {ok, Registry} = gtp_context_reg:registry(Child),
+	      M#{Id => Registry};
+	 ({Id, Child, _, _}, M) ->
+	      M#{Id => Child}
+      end,
+      #{}, supervisor:which_children(MgmtSup)).
 
 %% ===================================================================
 %% Supervisor callbacks

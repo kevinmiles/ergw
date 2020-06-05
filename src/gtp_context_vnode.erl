@@ -10,6 +10,7 @@
 
 -compile({parse_transform, cut}).
 
+%% vnode API
 -export([start_vnode/1,
 	 init/1,
 	 terminate/2,
@@ -26,13 +27,15 @@
 	 handle_overload_info/2,
 	 handle_coverage/4,
 	 handle_exit/3]).
+
+%% gtp_context API
 -export([port_message/2]).
 
 -include_lib("kernel/include/logger.hrl").
 -include_lib("gtplib/include/gtp_packet.hrl").
 -include("include/ergw.hrl").
 
--record(state, {partition, sup, tid, prefix}).
+-record(state, {partition, mgmt, ctx, reg}).
 
 -define(MAX_TRIES, 32).
 
@@ -68,10 +71,10 @@ start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
 
 init([Partition]) ->
-    TID = ets:new(?MODULE, [ordered_set, private, {keypos, 1}]),
-    {ok, SupRef} = gtp_context_sup_sup:new(Partition),
-    State0 = #state{partition = Partition, sup = SupRef, tid = TID},
-    State = State0#state{prefix = init_tei_prefix(State0)},
+    {ok, MgmtSupRef} = gtp_context_mgmt_sup:new(Partition),
+    #{gtp_context_sup := CtxSup, gtp_context_reg := Registry} =
+	gtp_context_mgmt_sup:get_workers(MgmtSupRef),
+    State = #state{partition = Partition, mgmt = MgmtSupRef, ctx = CtxSup, reg = Registry},
     {ok, State}.
 
 handle_command(ping, _Sender, #state{partition = Partition} = State) ->
@@ -108,8 +111,8 @@ handle_overload_command(_, _, _) ->
 handle_overload_info(_, _Idx) ->
     ok.
 
-is_empty(#state{sup = Sup} = State) ->
-    IsEmpty = (supervisor:which_children(Sup) =:= []),
+is_empty(#state{ctx = CtxSup} = State) ->
+    IsEmpty = (supervisor:which_children(CtxSup) =:= []),
     {IsEmpty, State}.
 
 delete(State) ->
@@ -121,9 +124,9 @@ handle_coverage(_Req, _KeySpaces, _Sender, State) ->
 handle_exit(_Pid, _Reason, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{sup = Sup} = State) when is_pid(Sup) ->
-    log("terminate with sup ~p", [Sup], State),
-    gtp_context_sup_sup:stop(Sup),
+terminate(_Reason, #state{mgmt = MgmtSup} = State) when is_pid(MgmtSup) ->
+    log("terminate with sup ~p", [MgmtSup], State),
+    gtp_context_mgmt_sup:stop(MgmtSup),
     ok;
 terminate(_Reason, _State) ->
     log("terminate without sup ~p", [_State], _State),
@@ -134,17 +137,17 @@ terminate(_Reason, _State) ->
 %%====================================================================
 
 %% TEID handling for GTPv1 is brain dead....
-port_message(Request, #gtp{version = v2, type = MsgType, tei = 0} = Msg, Sender, State)
-  when MsgType == change_notification_request;
-       MsgType == change_notification_response ->
-    Keys = gtp_v2_c:get_msg_keys(Msg),
-    port_message(Keys, Request, Msg, Sender, State);
-
-%% same as above for GTPv2
 port_message(Request, #gtp{version = v1, type = MsgType, tei = 0} = Msg, Sender, State)
   when MsgType == ms_info_change_notification_request;
        MsgType == ms_info_change_notification_response ->
     Keys = gtp_v1_c:get_msg_keys(Msg),
+    port_message(Keys, Request, Msg, Sender, State);
+
+%% same as above for GTPv2
+port_message(Request, #gtp{version = v2, type = MsgType, tei = 0} = Msg, Sender, State)
+  when MsgType == change_notification_request;
+       MsgType == change_notification_response ->
+    Keys = gtp_v2_c:get_msg_keys(Msg),
     port_message(Keys, Request, Msg, Sender, State);
 
 port_message(#request{gtp_port = GtpPort} = Request,
@@ -158,7 +161,7 @@ port_message(#request{gtp_port = GtpPort} = Request,
 	    end,
 	    validate_teid(Msg),
 	    Server = context_new(GtpPort, Version, Interface, InterfaceOpts, State),
-	    Reply = do_port_message(Server, Request, Msg, false),
+	    Reply = port_message(Server, Request, Msg, false, Sender, State),
 	    {reply, Reply, State};
 
 	{error, _} = Error ->
@@ -167,21 +170,25 @@ port_message(#request{gtp_port = GtpPort} = Request,
 port_message(_Request, _Msg, _Sender, State) ->
     {reply, {error, not_found}, State}.
 
-port_message([], _Request, _Msg, _Sender, State) ->
+port_message([], _Request, _Msg, Sender, State) ->
     {reply, {error, not_found}, State};
-port_message([H|T], Request, Msg, Sender, State) ->
-    case lookup(H, State) of
-	[{_, TEI}] when is_integer(TEI) ->
-	    case lookup_tei(TEI, Request, State) of
-		[{_, Server}] when is_pid(Server) ->
-		    Reply = do_port_message(Server, Request, Msg, false),
-		    {reply, Reply, State};
-		_ ->
-		    {reply, {error, not_found}, State}
-	    end;
+port_message([Key|T], Request, Msg, Sender, #state{reg = Registry} = State) ->
+    log("lookup for ~p", [Key], State),
+    case gtp_context_reg:lookup(Registry, Key) of
+	Server when is_pid(Server) ->
+	    Reply = port_message(Server, Request, Msg, false, Sender, State),
+	    {reply, Reply, State};
 	_ ->
 	    port_message(T, Request, Msg, Sender, State)
     end.
+
+port_message(Server, Request, #gtp{type = g_pdu} = Msg, Resent, _Sender, _State) ->
+    gtp_context:port_message(Server, Request, Msg, Resent);
+port_message(Server, Request, Msg, Resent, _Sender, #state{reg = Registry}) ->
+    if not Resent -> gtp_context:register_request(?MODULE, Server, Request, Registry);
+       true       -> ok
+    end,
+    gtp_context:port_message(Server, Request#request{reg = Registry}, Msg, Resent).
 
 %%====================================================================
 %% Context Helpers
@@ -197,28 +204,14 @@ get_handler_if(GtpPort, #gtp{version = v1} = Msg) ->
 get_handler_if(GtpPort, #gtp{version = v2} = Msg) ->
     gtp_v2_c:get_handler(GtpPort, Msg).
 
-context_new(Port, Version, Interface, InterfaceOpts, #state{sup = Sup} = State) ->
-    {ok, TEI} = alloc_tei(Port, State),
-    case gtp_context_sup:new(Sup, Port, TEI, Version, Interface, InterfaceOpts) of
+context_new(Port, Version, Interface, InterfaceOpts,
+	    #state{ctx = CtxSup, reg = Registry} = State) ->
+    case gtp_context_sup:new(CtxSup, Port, Registry, Version, Interface, InterfaceOpts) of
 	{ok, Server} when is_pid(Server) ->
-	    insert_tei(Port, TEI, Server, State),
 	    Server;
 	{error, Error} ->
 	    throw({error, Error})
     end.
-
-%% context_new(Port, Version, Interface, InterfaceOpts, State) ->
-%%     TEI = alloc_tei(Port, State),
-%%     gtp_context:init([Port, TEI, Version, Interface, InterfaceOpts]).
-
-%% do_port_message/4
-do_port_message(Server, Request, #gtp{type = g_pdu} = Msg, _Resent) ->
-    gen_statem:cast(Server, {handle_pdu, Request, Msg});
-do_port_message(Server, Request, Msg, Resent) ->
-    %% if not Resent -> register_request(?MODULE, Server, Request);
-    %%    true       -> ok
-    %% end,
-    gen_statem:cast(Server, {handle_message, Request, Msg, Resent}).
 
 %%====================================================================
 %% Internal Helpers
@@ -239,16 +232,18 @@ context_key(#gtp{version = v2} = Msg) ->
 context_key_1([{Type, Id, _}]) ->
     {Type, Id}.
 
-maybe_init_rnd([]) ->
-    rand:seed_s(exrop);
-maybe_init_rnd([{_, RndState}]) ->
-    RndState.
-
 %% port message/3
 port_message(IndexNode, Request, Msg) ->
     ?LOG(debug, "IndexNode: ~p", [IndexNode]),
     Command = {port_message, Request, Msg},
     riak_core_vnode_master:sync_spawn_command(IndexNode, Command, gtp_context_vnode_master).
+
+-if(TBD).
+
+maybe_init_rnd([]) ->
+    rand:seed_s(exrop);
+maybe_init_rnd([{_, RndState}]) ->
+    RndState.
 
 %% with_keyfun/2
 with_keyfun(#request{gtp_port = Port}, Fun) ->
@@ -284,15 +279,6 @@ alloc_tei(Name, KeyFun, #state{tid = TID} = State) ->
     RndState = maybe_init_rnd(ets:lookup(TID, RndStateKey)),
     alloc_tei(RndStateKey, RndState, KeyFun, State, ?MAX_TRIES).
 
-init_tei_prefix(#state{partition = Partition} = State) ->
-    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-    NumPartitions = chashbin:num_partitions(CHBin),
-    PrefixLen = round(math:log2(NumPartitions)),
-    Prefix = riak_core_ring_util:hash_to_partition_id(Partition, NumPartitions)
-	bsl (32 - PrefixLen),
-    Mask = 16#ffffffff bsr PrefixLen,
-    log("Prefix: 0x~8.16.0b, Mask: 0x~8.16.0b", [Prefix, Mask], State),
-    {Prefix, Mask}.
 
 %% alloc_tei/5
 alloc_tei(_RndStateKey, _RndState, _KeyFun, _State, 0) ->
@@ -313,3 +299,5 @@ lookup(Key, #state{tid = TID}) ->
 
 insert(Value, #state{tid = TID}) ->
     ets:insert(TID, Value).
+
+-endif.

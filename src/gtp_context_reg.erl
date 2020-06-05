@@ -13,12 +13,12 @@
 
 %% API
 -export([start_link/1]).
--export([register/3, register_new/3, update/4, unregister/3,
-	 lookup/1, select/1,
-	 match_key/2, match_keys/2,
-	 await_unreg/1]).
--export([all/0]).
--export([alloc_tei/1]).
+-export([registry/1, register/4, register_new/4, update/5, unregister/4,
+	 lookup/2, select/2,
+	 match_key/3, match_keys/3,
+	 await_unreg/2]).
+-export([all/1]).
+-export([alloc_tei/2, lookup_tei/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -26,10 +26,10 @@
 %% --------------------------------------------------------------------
 %% Include files
 %% --------------------------------------------------------------------
+-include_lib("kernel/include/logger.hrl").
 -include("include/ergw.hrl").
 
--define(SERVER, ?MODULE).
--record(state, {pids, await_unreg}).
+-record(state, {partition, tid, prefix, pids, await_unreg}).
 
 -define(MAX_TRIES, 32).
 
@@ -38,83 +38,102 @@
 %%%===================================================================
 
 start_link(Partition) ->
-    %% FIXME: temp workarround, will be removed
-    case whereis(?SERVER) of
-	Pid when is_pid(Pid) ->
-	    gen_server:start_link(?MODULE, [Partition], []);
-	_ ->
-	    gen_server:start_link({local, ?SERVER}, ?MODULE, [Partition], [])
-    end.
+    gen_server:start_link(?MODULE, [Partition], []).
 
-lookup(Key) when is_tuple(Key) ->
-    case ets:lookup(?SERVER, Key) of
+registry(Server) ->
+    gen_server:call(Server, registry).
+
+lookup({_, TID}, Key) when is_tuple(Key) ->
+    case ets:lookup(TID, Key) of
 	[{Key, Value}] ->
 	    Value;
 	_ ->
 	    undefined
     end.
 
-select(Key) ->
-    ets:select(?SERVER, [{{Key, '$1'},[],['$1']}]).
+select({_, TID}, Key) ->
+    ets:select(TID, [{{Key, '$1'},[],['$1']}]).
 
-match_key(#gtp_port{name = Name}, Key) ->
-    select({Name, Key}).
+match_key(Registry, #gtp_port{name = Name}, Key) ->
+    select(Registry, {Name, Key}).
 
-match_keys(_, []) ->
+match_keys(_, _, []) ->
     throw({error, not_found});
-match_keys(Port, [H|T]) ->
-    case match_key(Port, H) of
+match_keys(Registry, Port, [H|T]) ->
+    case match_key(Registry, Port, H) of
 	[_|_] = Match ->
 	    Match;
 	_ ->
-	    match_keys(Port, T)
+	    match_keys(Registry, Port, T)
     end.
 
-register(Keys, Handler, Pid)
+register({Server, _}, Keys, Handler, Pid)
   when is_list(Keys), is_atom(Handler), is_pid(Pid) ->
-    gen_server:call(?SERVER, {register, Keys, Handler, Pid}).
+    gen_server:call(Server, {register, Keys, Handler, Pid}).
 
-register_new(Keys, Handler, Pid)
+register_new({Server, _}, Keys, Handler, Pid)
   when is_list(Keys), is_atom(Handler), is_pid(Pid) ->
-    gen_server:call(?SERVER, {register_new, Keys, Handler, Pid}).
+    gen_server:call(Server, {register_new, Keys, Handler, Pid}).
 
-update(Delete, Insert, Handler, Pid)
+update({Server, _}, Delete, Insert, Handler, Pid)
   when is_list(Delete), is_list(Insert), is_atom(Handler), is_pid(Pid) ->
-    gen_server:call(?SERVER, {update, Delete, Insert, Handler, Pid}).
+    gen_server:call(Server, {update, Delete, Insert, Handler, Pid}).
 
-unregister(Keys, Handler, Pid)
+unregister({Server, _}, Keys, Handler, Pid)
   when is_list(Keys), is_atom(Handler), is_pid(Pid) ->
-    gen_server:call(?SERVER, {unregister, Keys, Handler, Pid}).
+    gen_server:call(Server, {unregister, Keys, Handler, Pid}).
 
-all() ->
-    ets:tab2list(?SERVER).
+all({_, TID}) ->
+    ets:tab2list(TID).
 
-await_unreg(Key) ->
-    gen_server:call(?SERVER, {await_unreg, Key}, 1000).
+await_unreg({Server, _}, Key) ->
+    gen_server:call(Server, {await_unreg, Key}, 1000).
 
-%% alloc_tei/1
-alloc_tei(#gtp_port{name = Name} = Port) ->
-    alloc_tei(Name, gtp_context:port_teid_key(Port, _));
-alloc_tei(#pfcp_ctx{name = Name} = PCtx) ->
-    alloc_tei(Name, ergw_pfcp:ctx_teid_key(PCtx, _)).
+%% with_keyfun/2
+with_keyfun(#request{gtp_port = Port}, Fun) ->
+    with_keyfun(Port, Fun);
+with_keyfun(#gtp_port{name = Name} = Port, Fun) ->
+    Fun(Name, gtp_context:port_teid_key(Port, _));
+with_keyfun(#pfcp_ctx{name = Name} = PCtx, Fun) ->
+    Fun(Name, ergw_pfcp:ctx_teid_key(PCtx, _)).
 
-alloc_tei(Name, KeyFun)
+%% alloc_tei/2
+alloc_tei(Registry, Port) ->
+    with_keyfun(Port, alloc_tei(Registry, _, _)).
+
+%% alloc_tei/3
+alloc_tei({Server, _}, Name, KeyFun)
   when is_function(KeyFun, 1) ->
-    gen_server:call(?SERVER, {alloc_tei, Name, KeyFun}).
+    gen_server:call(Server, {alloc_tei, Name, KeyFun}).
+
+%% lookup_tei/3
+lookup_tei(Registry, Port, TEI) ->
+    with_keyfun(Port, lookup_tei(Registry, _, TEI, _)).
+
+%% lookup_tei/4
+lookup_tei(Registry, _Name, TEI, KeyFun) ->
+    lookup(Registry, KeyFun(TEI)).
 
 %%%===================================================================
 %%% regine callbacks
 %%%===================================================================
 
-init([_Partition]) ->
+init([Partition]) ->
     process_flag(trap_exit, true),
 
-    ets:new(?SERVER, [ordered_set, named_table, public, {keypos, 1}]),
+    TID = ets:new(?MODULE, [ordered_set, public, {keypos, 1}]),
     State = #state{
+	       partition = Partition,
+	       tid = TID,
+	       prefix = init_tei_prefix(Partition),
 	       pids = #{},
 	       await_unreg = #{}
 	      },
     {ok, State}.
+
+handle_call(registry, _From, #state{tid = TID} = State) ->
+    Registry = {self(), TID},
+    {reply, {ok, Registry}, State};
 
 handle_call({register, Keys, Handler, Pid}, _From, State) ->
     handle_add_keys(fun ets:insert/2, Keys, Handler, Pid, State);
@@ -123,7 +142,7 @@ handle_call({register_new, Keys, Handler, Pid}, _From, State) ->
     handle_add_keys(fun ets:insert_new/2, Keys, Handler, Pid, State);
 
 handle_call({update, Delete, Insert, Handler, Pid}, _From, State) ->
-    lists:foreach(fun(Key) -> delete_key(Key, Pid) end, Delete),
+    lists:foreach(fun(Key) -> delete_key(Key, Pid, State) end, Delete),
     NKeys = ordsets:union(ordsets:subtract(get_pid(Pid, State), Delete), Insert),
     handle_add_keys(fun ets:insert/2, Insert, Handler, Pid, update_pid(Pid, NKeys, State));
 
@@ -143,10 +162,10 @@ handle_call({await_unreg, Pid}, From, #state{pids = Pids, await_unreg = AWait} =
 	    {reply, ok, State0}
     end;
 
-handle_call({alloc_tei, Name, KeyFun}, _From, State) ->
+handle_call({alloc_tei, Name, KeyFun}, _From, #state{tid = TID} = State) ->
     RndStateKey = {Name, tei},
-    RndState = maybe_init_rnd(ets:lookup(?SERVER, RndStateKey)),
-    Reply = alloc_tei(RndStateKey, RndState, KeyFun, ?MAX_TRIES),
+    RndState = maybe_init_rnd(ets:lookup(TID, RndStateKey)),
+    Reply = alloc_tei(RndStateKey, RndState, KeyFun, ?MAX_TRIES, State),
     {reply, Reply, State}.
 
 handle_cast(_Msg, State) ->
@@ -181,9 +200,9 @@ notify_unregister(Pid, #state{await_unreg = AWait} = State) ->
     lists:foreach(fun(From) -> gen_server:reply(From, ok) end, Reply),
     State#state{await_unreg = maps:remove(Pid, AWait)}.
 
-handle_add_keys(Fun, Keys, Handler, Pid, State) ->
+handle_add_keys(Fun, Keys, Handler, Pid, #state{tid = TID} = State) ->
     RegV = {Handler, Pid},
-    case Fun(?SERVER, [{Key, RegV} || Key <- Keys]) of
+    case Fun(TID, [{Key, RegV} || Key <- Keys]) of
 	true ->
 	    link(Pid),
 	    NKeys = ordsets:union(Keys, get_pid(Pid, State)),
@@ -193,7 +212,7 @@ handle_add_keys(Fun, Keys, Handler, Pid, State) ->
     end.
 
 delete_keys(Keys, Pid, State) ->
-    lists:foreach(fun(Key) -> delete_key(Key, Pid) end, Keys),
+    lists:foreach(fun(Key) -> delete_key(Key, Pid, State) end, Keys),
     case ordsets:subtract(get_pid(Pid, State), Keys) of
 	[] ->
 	    unlink(Pid),
@@ -204,10 +223,10 @@ delete_keys(Keys, Pid, State) ->
 
 %% this is not the same a ets:take, the object will only
 %% be delete if Key and Pid match.....
-delete_key(Key, Pid) ->
-    case ets:lookup(?SERVER, Key) of
+delete_key(Key, Pid, #state{tid = TID}) ->
+    case ets:lookup(TID, Key) of
 	[{Key, {_, Pid}}] ->
-	    ets:take(?SERVER, Key);
+	    ets:take(TID, Key);
 	Other ->
 	    Other
     end.
@@ -221,14 +240,26 @@ maybe_init_rnd([]) ->
 maybe_init_rnd([{_, RndState}]) ->
     RndState.
 
-alloc_tei(_RndStateKey, _RndState, _KeyFun, 0) ->
+init_tei_prefix(Partition) ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    NumPartitions = chashbin:num_partitions(CHBin),
+    PrefixLen = round(math:log2(NumPartitions)),
+    Prefix = riak_core_ring_util:hash_to_partition_id(Partition, NumPartitions)
+	bsl (32 - PrefixLen),
+    Mask = 16#ffffffff bsr PrefixLen,
+    ?LOG(debug, "Prefix: 0x~8.16.0b, Mask: 0x~8.16.0b", [Prefix, Mask]),
+    {Prefix, Mask}.
+
+alloc_tei(_RndStateKey, _RndState, _KeyFun, 0, _State) ->
     {error, no_tei};
-alloc_tei(RndStateKey, RndState0, KeyFun, Cnt) ->
-    {TEI, RndState} = rand:uniform_s(16#fffffffe, RndState0),
-    case lookup(KeyFun(TEI)) of
-	undefined ->
-	    true = ets:insert(?SERVER, {RndStateKey, RndState}),
+alloc_tei(RndStateKey, RndState0, KeyFun, Cnt,
+	  #state{tid = TID, prefix = {Prefix, Mask}} = State) ->
+    {TEI0, RndState} = rand:uniform_s(16#fffffffe, RndState0),
+    TEI = Prefix + (TEI0 band Mask),
+    case ets:lookup(TID, KeyFun(TEI)) of
+	[] ->
+	    true = ets:insert(TID, {RndStateKey, RndState}),
 	    {ok, TEI};
 	_ ->
-	    alloc_tei(RndStateKey, RndState, KeyFun, Cnt - 1)
+	    alloc_tei(RndStateKey, RndState, KeyFun, Cnt - 1, State)
     end.

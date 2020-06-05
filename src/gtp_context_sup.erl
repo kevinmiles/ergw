@@ -26,14 +26,14 @@
 start_link() ->
     supervisor:start_link(?MODULE, []).
 
-new(Sup, Port, TEI, Version, Interface, IfOpts) ->
+new(Sup, Port, Registry, Version, Interface, IfOpts) ->
     Opts = [{hibernate_after, 500},
 	    {spawn_opt,[{fullsweep_after, 0}]}],
-    new(Sup, Port, TEI, Version, Interface, IfOpts, Opts).
+    new(Sup, Port, Registry, Version, Interface, IfOpts, Opts).
 
-new(Sup, Port, TEI, Version, Interface, IfOpts, Opts) ->
-    ?LOG(debug, "new(~p)", [[Sup, Port, TEI, Version, Interface, IfOpts, Opts]]),
-    supervisor:start_child(Sup, [Port, TEI, Version, Interface, IfOpts, Opts]).
+new(Sup, Port, Registry, Version, Interface, IfOpts, Opts) ->
+    ?LOG(debug, "new(~p)", [[Sup, Port, Registry, Version, Interface, IfOpts, Opts]]),
+    supervisor:start_child(Sup, [Port, Registry, Version, Interface, IfOpts, Opts]).
 
 %% ===================================================================
 %% Supervisor callbacks

@@ -9,7 +9,7 @@
 
 -compile({parse_transform, cut}).
 
--export([create_sgi_session/4, create_tdf_session/4,
+-export([create_sgi_session/5, create_tdf_session/4,
 	 usage_report_to_charging_events/3,
 	 process_online_charging_events/4,
 	 process_offline_charging_events/4,
@@ -1058,7 +1058,7 @@ update_m_rec(Record, Map) when is_tuple(Record) ->
 
 register_ctx_ids(Handler, #pfcp_ctx{seid = #seid{cp = SEID}}) ->
     Keys = [{seid, SEID}],
-    gtp_context_reg:register(Keys, Handler, self()).
+    gtp_global_context_reg:register(Keys, Handler, self()).
 
 register_ctx_ids(Handler,
 		 #context{local_data_endp = LocalDataEndp},
@@ -1067,11 +1067,11 @@ register_ctx_ids(Handler,
 	    [ergw_pfcp:ctx_teid_key(PCtx, #fq_teid{ip = LocalDataEndp#gtp_endp.ip,
 						   teid = LocalDataEndp#gtp_endp.teid}) ||
 		is_record(LocalDataEndp, gtp_endp)]],
-    gtp_context_reg:register(Keys, Handler, self()).
+    gtp_global_context_reg:register(Keys, Handler, self()).
 
-create_sgi_session(PCtx, NodeCaps, PCC, Ctx0)
+create_sgi_session(PCtx, NodeCaps, PCC, Ctx0, #{registry := Registry})
   when is_record(PCC, pcc_ctx) ->
-    Ctx = ergw_pfcp:assign_data_teid(PCtx, NodeCaps, Ctx0),
+    Ctx = ergw_pfcp:assign_data_teid(PCtx, NodeCaps, Registry, Ctx0),
     register_ctx_ids(gtp_context, Ctx, PCtx),
     session_establishment_request(PCC, PCtx, Ctx).
 

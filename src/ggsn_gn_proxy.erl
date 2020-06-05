@@ -278,8 +278,8 @@ handle_request(ReqKey,
     Context1 = update_context_from_gtp_req(Request, Context0#context{state = #context_state{}}),
     Context2 = gtp_path:bind(Request, false, Context1),
 
-    gtp_context:terminate_colliding_context(Context2),
-    gtp_context:remote_context_register_new(Context2),
+    gtp_context:terminate_colliding_context(Context2, Data),
+    gtp_context:remote_context_register_new(Context2, Data),
 
     SessionOpts0 = ggsn_gn:init_session(IEs, Context2, AAAopts),
     SessionOpts = ggsn_gn:init_session_from_gtp_req(IEs, AAAopts, SessionOpts0),
@@ -298,12 +298,12 @@ handle_request(ReqKey,
 
     {ok, _} = ergw_aaa_session:invoke(Session, SessionOpts, start, #{async => true}),
 
-    ProxyContext0 = init_proxy_context(ProxyGtpPort, Context2, ProxyInfo, ProxyGGSN),
+    ProxyContext0 = init_proxy_context(ProxyGtpPort, Context2, ProxyInfo, ProxyGGSN, Data),
     ProxyContext1 = gtp_path:bind(true, ProxyContext0),
 
     ergw_sx_node:wait_connect(SxConnectId),
     {Context, ProxyContext, PCtx} =
-	ergw_proxy_lib:create_forward_session(DPCandidates, Context2, ProxyContext1),
+	ergw_proxy_lib:create_forward_session(DPCandidates, Context2, ProxyContext1, Data),
 
     DataNew = Data#{context => Context, proxy_context => ProxyContext, pfcp => PCtx},
     forward_request(sgsn2ggsn, ReqKey, Request, DataNew, Data),
@@ -320,11 +320,12 @@ handle_request(ReqKey,
     Context0 = update_context_from_gtp_req(Request, OldContext),
     Context1 = gtp_path:bind(Request, false, Context0),
 
-    gtp_context:remote_context_update(OldContext, Context1),
+    gtp_context:remote_context_update(OldContext, Context1, Data),
 
     Context = update_path_bind(Context1, OldContext),
 
-    ProxyContext1 = handle_sgsn_change(Context, OldContext, OldProxyContext#context{version = v1}),
+    ProxyContext1 = handle_sgsn_change(Context, OldContext,
+				       OldProxyContext#context{version = v1}, Data),
     ProxyContext = update_path_bind(ProxyContext1, OldProxyContext),
 
     DataNew = Data#{context => Context, proxy_context => ProxyContext},
@@ -406,7 +407,7 @@ handle_response(#proxy_request{direction = sgsn2ggsn} = ProxyRequest,
 
     ProxyContext1 = update_context_from_gtp_req(Response, PrevProxyCtx),
     ProxyContext = gtp_path:bind(Response, true, ProxyContext1),
-    gtp_context:remote_context_register(ProxyContext),
+    gtp_context:remote_context_register(ProxyContext, Data),
 
     Return =
 	if ?CAUSE_OK(Cause) ->
@@ -434,7 +435,7 @@ handle_response(#proxy_request{direction = sgsn2ggsn,
     ?LOG(debug, "OK Proxy Response ~p", [Response]),
 
     ProxyContext = update_context_from_gtp_req(Response, OldProxyContext),
-    gtp_context:remote_context_update(OldProxyContext, ProxyContext),
+    gtp_context:remote_context_update(OldProxyContext, ProxyContext, Data),
 
     PCtx = ergw_proxy_lib:modify_forward_session(PrevContext, Context,
 						 PrevProxyCtx, ProxyContext, PCtx0),
@@ -522,13 +523,14 @@ delete_forward_session(Reason, #{context := Context,
 
 handle_sgsn_change(#context{remote_control_teid = NewFqTEID},
 		  #context{remote_control_teid = OldFqTEID},
-		  #context{control_port = CntlPort} = ProxyContext0)
+		  #context{control_port = CntlPort} = ProxyContext0,
+		  Data)
   when OldFqTEID /= NewFqTEID ->
-    {ok, CntlTEI} = gtp_context_reg:alloc_tei(CntlPort),
+    {ok, CntlTEI} = gtp_context_reg:alloc_tei(CntlPort, Data),
     ProxyContext = ProxyContext0#context{local_control_tei = CntlTEI},
-    gtp_context:remote_context_update(ProxyContext0, ProxyContext),
+    gtp_context:remote_context_update(ProxyContext0, ProxyContext, Data),
     ProxyContext;
-handle_sgsn_change(_, _, ProxyContext) ->
+handle_sgsn_change(_, _, ProxyContext, _) ->
     ProxyContext.
 
 update_path_bind(NewContext0, OldContext)
@@ -542,9 +544,9 @@ update_path_bind(NewContext, _OldContext) ->
 init_proxy_context(CntlPort,
 		   #context{imei = IMEI, context_id = ContextId, version = Version,
 			    control_interface = Interface, state = CState},
-		   #{imsi := IMSI, msisdn := MSISDN, apn := DstAPN}, {_GwNode, GGSN}) ->
+		   #{imsi := IMSI, msisdn := MSISDN, apn := DstAPN}, {_GwNode, GGSN}, Data) ->
     {APN, _OI} = ergw_node_selection:split_apn(DstAPN),
-    {ok, CntlTEI} = gtp_context_reg:alloc_tei(CntlPort),
+    {ok, CntlTEI} = gtp_context_reg:alloc_tei(CntlPort, Data),
     #context{
        apn               = APN,
        imsi              = IMSI,

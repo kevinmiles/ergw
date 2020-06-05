@@ -17,7 +17,7 @@
 	 outer_header_creation/1,
 	 outer_header_removal/1,
 	 ctx_teid_key/2,
-	 assign_data_teid/3,
+	 assign_data_teid/4,
 	 up_inactivity_timer/1]).
 -export([init_ctx/1, reset_ctx/1,
 	 get_id/2, get_id/3, update_pfcp_rules/3]).
@@ -101,13 +101,13 @@ get_port_vrf(#gtp_port{vrf = VRF}, VRFs)
 ctx_teid_key(#pfcp_ctx{name = Name}, TEI) ->
     {Name, {teid, 'gtp-u', TEI}}.
 
-assign_data_teid(PCtx, {VRFs, _} = _NodeCaps,
+assign_data_teid(PCtx, {VRFs, _} = _NodeCaps, Registry,
 		 #context{control_port = ControlPort} = Context) ->
     #vrf{name = Name, ipv4 = IP4, ipv6 = IP6} =
 	get_port_vrf(ControlPort, VRFs),
 
     IP = ergw_gsn_lib:choose_context_ip(IP4, IP6, Context),
-    {ok, DataTEI} = gtp_context_reg:alloc_tei(PCtx),
+    {ok, DataTEI} = gtp_context_reg:alloc_tei(Registry, PCtx),
     Context#context{
       local_data_endp = #gtp_endp{vrf = Name, ip = ergw_inet:bin2ip(IP), teid = DataTEI}
      }.

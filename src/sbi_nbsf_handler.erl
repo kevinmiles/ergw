@@ -86,7 +86,8 @@ malformed_request(Req0, _State) ->
 
 resource_exists(Req, Query) ->
     Filter = maps:fold(fun query_filter/3, #bsf{_ = '_'}, Query),
-    Obj = gtp_context_reg:select(Filter),
+    %% TODO: fixme: Obj = gtp_context_reg:select(Filter),
+    Obj = [],
     Result = length(Obj) > 0,
     {Result, Req, Obj}.
 

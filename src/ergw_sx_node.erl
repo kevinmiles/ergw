@@ -188,7 +188,7 @@ init([Parent, Node, NodeSelect, IP4, IP6, NotifyUp]) ->
 
     {ok, CP, GtpPort} = ergw_sx_socket:id(),
     #gtp_port{name = CntlPortName} = GtpPort,
-    {ok, TEI} = gtp_context_reg:alloc_tei(GtpPort),
+    {ok, TEI} = gtp_global_context_reg:alloc_tei(GtpPort),
     SEID = ergw_sx_socket:seid(),
     PCtx = #pfcp_ctx{
 	      name = Node,
@@ -201,7 +201,7 @@ init([Parent, Node, NodeSelect, IP4, IP6, NotifyUp]) ->
     RegKeys =
 	[{CntlPortName, {teid, 'gtp-u', TEI}},
 	 {seid, SEID}],
-    gtp_context_reg:register(RegKeys, ?MODULE, self()),
+    gtp_global_context_reg:register(RegKeys, ?MODULE, self()),
 
     Nodes = setup:get_env(ergw, nodes, #{}),
     Cfg = maps:get(Node, Nodes, maps:get(default, Nodes, #{})),
@@ -765,7 +765,7 @@ create_data_endp(PCtx, Node, VRFs) ->
 	lists:filter(fun(#vrf{features = Features}) ->
 			     lists:member('CP-Function', Features)
 		     end, maps:values(VRFs)),
-    {ok, DataTEI} = gtp_context_reg:alloc_tei(PCtx),
+    {ok, DataTEI} = gtp_global_context_reg:alloc_tei(PCtx),
     #gtp_endp{
        vrf = VRF#vrf.name,
        ip = choose_up_ip(Node, VRF),

@@ -37,7 +37,7 @@ tunnel(Port) when is_atom(Port) ->
 
 contexts(all) ->
     lists:usort([Pid || {{_Socket, {teid, 'gtp-c', _TEID}}, {_, Pid}}
-				       <- gtp_context_reg:all(), is_pid(Pid)]).
+				       <- gtp_global_context_reg:all(), is_pid(Pid)]).
 
 delete_contexts(Count) ->
     delete_contexts(contexts(all), Count).

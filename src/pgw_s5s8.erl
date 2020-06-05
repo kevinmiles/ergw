@@ -370,7 +370,7 @@ handle_request(ReqKey,
     Context2 = update_context_from_gtp_req(Request, Context1),
     ContextPreAuth = gtp_path:bind(Request, false, Context2),
 
-    gtp_context:terminate_colliding_context(ContextPreAuth),
+    gtp_context:terminate_colliding_context(ContextPreAuth, Data),
 
     PAA = maps:get(?'PDN Address Allocation', IEs, undefined),
     DAF = proplists:get_bool('DAF', gtp_v2_c:get_indication_flags(IEs)),
@@ -434,8 +434,8 @@ handle_request(ReqKey,
     PCC4 = ergw_gsn_lib:session_events_to_pcc_ctx(RfSEvs, PCC3),
 
     {Context, PCtx} =
-	ergw_gsn_lib:create_sgi_session(PendingPCtx, NodeCaps, PCC4, ContextPending),
-    gtp_context:remote_context_register_new(Context),
+	ergw_gsn_lib:create_sgi_session(PendingPCtx, NodeCaps, PCC4, ContextPending, Data),
+    gtp_context:remote_context_register_new(Context, Data),
 
     GxReport = ergw_gsn_lib:pcc_events_to_charging_rule_report(PCCErrors1 ++ PCCErrors2),
     if map_size(GxReport) /= 0 ->
@@ -477,7 +477,7 @@ handle_request(ReqKey,
     URRActions = update_session_from_gtp_req(IEs, Session, Context),
 
     Data1 = if Context /= OldContext ->
-		     gtp_context:remote_context_update(OldContext, Context),
+		     gtp_context:remote_context_update(OldContext, Context, Data0),
 		     apply_context_change(Context, OldContext, URRActions, Data0);
 		true ->
 		     trigger_defered_usage_report(URRActions, PCtx),

@@ -340,7 +340,7 @@ handle_request(ReqKey,
     Context1 = update_context_from_gtp_req(Request, Context0),
     ContextPreAuth = gtp_path:bind(Request, false, Context1),
 
-    gtp_context:terminate_colliding_context(ContextPreAuth),
+    gtp_context:terminate_colliding_context(ContextPreAuth, Data),
 
     SessionOpts0 = init_session(IEs, ContextPreAuth, AAAopts),
     SessionOpts1 = init_session_from_gtp_req(IEs, AAAopts, SessionOpts0),
@@ -400,8 +400,8 @@ handle_request(ReqKey,
     PCC3 = ergw_gsn_lib:session_events_to_pcc_ctx(AuthSEvs, PCC2),
     PCC4 = ergw_gsn_lib:session_events_to_pcc_ctx(RfSEvs, PCC3),
     {Context, PCtx} =
-	ergw_gsn_lib:create_sgi_session(PendingPCtx, NodeCaps, PCC4, ContextPending),
-    gtp_context:remote_context_register_new(Context),
+	ergw_gsn_lib:create_sgi_session(PendingPCtx, NodeCaps, PCC4, ContextPending, Data),
+    gtp_context:remote_context_register_new(Context, Data),
 
     GxReport = ergw_gsn_lib:pcc_events_to_charging_rule_report(PCCErrors1 ++ PCCErrors2),
     if map_size(GxReport) /= 0 ->
@@ -430,7 +430,7 @@ handle_request(ReqKey,
     URRActions = update_session_from_gtp_req(IEs, Session, Context),
 
     Data1 = if Context /= OldContext ->
-		     gtp_context:remote_context_update(OldContext, Context),
+		     gtp_context:remote_context_update(OldContext, Context, Data0),
 		     apply_context_change(Context, OldContext, URRActions, Data0);
 		true ->
 		     trigger_defered_usage_report(URRActions, PCtx),
