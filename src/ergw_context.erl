@@ -52,6 +52,8 @@ port_message(Keys, #request{gtp_port = GtpPort} = Request, Msg)
 port_message(Key, Request, Msg, Resent) ->
     apply2context(Key, port_message, [Request, Msg, Resent]).
 
+%%% -----------------------------------------------------------------
+
 %%%=========================================================================
 %%%  internal functions
 %%%=========================================================================
@@ -76,7 +78,7 @@ port_message_h(Request, #gtp{} = Msg) ->
     case jobs:ask(Queue) of
 	{ok, Opaque} ->
 	    try
-		port_message_run(Request, Msg)
+		gtp_context_vnode:port_message(Request, Msg)
 	    catch
 		throw:{error, Error} ->
 		    ?LOG(error, "handler failed with: ~p", [Error]),

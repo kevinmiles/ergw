@@ -14,7 +14,7 @@
 -compile({parse_transform, do}).
 
 -export([handle_response/4,
-	 start_link/5,
+	 start_link/6,
 	 send_request/7,
 	 send_response/2, send_response/3,
 	 send_request/6, resend_request/2,
@@ -31,6 +31,7 @@
 	 port_key/2, port_teid_key/2]).
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
+-export([ping/0, ping/1, ring_status/0]).
 
 %% ergw_context callbacks
 -export([sx_report/2, port_message/2, port_message/4]).
@@ -74,8 +75,8 @@ send_request(GtpPort, DstIP, DstPort, ReqId, Msg, ReqInfo) ->
 resend_request(GtpPort, ReqId) ->
     ergw_gtp_c_socket:resend_request(GtpPort, ReqId).
 
-start_link(GtpPort, Version, Interface, IfOpts, Opts) ->
-    gen_statem:start_link(?MODULE, [GtpPort, Version, Interface, IfOpts], Opts).
+start_link(GtpPort, TEI, Version, Interface, IfOpts, Opts) ->
+    gen_statem:start_link(?MODULE, [GtpPort, TEI, Version, Interface, IfOpts], Opts).
 
 path_restart(Context, Path) ->
     jobs:run(path_restart, fun() -> gen_statem:call(Context, {path_restart, Path}) end).
@@ -639,3 +640,33 @@ usage_report_to_accounting([H|_]) ->
     usage_report_to_accounting(H);
 usage_report_to_accounting(undefined) ->
     [].
+
+%%====================================================================
+%% riak core API
+%%====================================================================
+
+ping() ->
+    ping(os:timestamp()).
+
+ping(Key)->
+    DocIdx = hash_key(Key),
+    {PrefList, _} = riak_core_apl:get_primary_apl(DocIdx, 2, ergw),
+    ?LOG(debug, "PrefList: ~p", [PrefList]),
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    ?LOG(debug, "Ring Index: ~p", [chashbin:responsible_index(DocIdx, CHBin)]),
+    ?LOG(debug, "Ring Index: ~p", [chashbin:responsible_index(DocIdx, CHBin)]),
+    ?LOG(debug, "Ring Pos: ~p", [chashbin:responsible_position(DocIdx, CHBin)]),
+    ?LOG(debug, "Ring Pos: ~p", [chashbin:responsible_position(DocIdx, CHBin)]),
+    ?LOG(debug, "Index N: ~p", [riak_core_util:get_index_n({<<"gtp_context">>, term_to_binary(Key)})]),
+    IndexNode = hd(PrefList),
+    Command = ping,
+    riak_core_vnode_master:sync_spawn_command(IndexNode, Command, gtp_context_vnode_master).
+
+ring_status() ->
+  {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+  riak_core_ring:pretty_print(Ring, [legend]).
+
+%% internal
+
+hash_key(Key) ->
+  riak_core_util:chash_key({<<"gtp_context">>, term_to_binary(Key)}).

@@ -5,12 +5,12 @@
 %% as published by the Free Software Foundation; either version
 %% 2 of the License, or (at your option) any later version.
 
--module(gtp_context_sup).
+-module(gtp_context_sup_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, new/6, new/7]).
+-export([start_link/0, new/0, stop/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -24,16 +24,13 @@
 %% ===================================================================
 
 start_link() ->
-    supervisor:start_link(?MODULE, []).
+    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-new(Sup, Port, TEI, Version, Interface, IfOpts) ->
-    Opts = [{hibernate_after, 500},
-	    {spawn_opt,[{fullsweep_after, 0}]}],
-    new(Sup, Port, TEI, Version, Interface, IfOpts, Opts).
+new() ->
+    supervisor:start_child(?SERVER, []).
 
-new(Sup, Port, TEI, Version, Interface, IfOpts, Opts) ->
-    ?LOG(debug, "new(~p)", [[Sup, Port, TEI, Version, Interface, IfOpts, Opts]]),
-    supervisor:start_child(Sup, [Port, TEI, Version, Interface, IfOpts, Opts]).
+stop(Id) ->
+    supervisor:terminate_child(?SERVER, Id).
 
 %% ===================================================================
 %% Supervisor callbacks
@@ -41,4 +38,4 @@ new(Sup, Port, TEI, Version, Interface, IfOpts, Opts) ->
 
 init([]) ->
     {ok, {{simple_one_for_one, 5, 10},
-	  [{gtp_context, {gtp_context, start_link, []}, temporary, 1000, worker, [gtp_context]}]}}.
+	  [{gtp_context_sup, {gtp_context_sup, start_link, []}, temporary, 1000, supervisor, [gtp_context_sup]}]}}.

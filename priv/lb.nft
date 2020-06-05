@@ -1,0 +1,14 @@
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet nat {
+      chain prerouting {
+	    type filter hook prerouting priority -100;
+	    ip daddr 172.20.16.28 udp dport 2123 meta nftrace set 1 counter ip daddr set numgen inc mod 2 map { 0 : 10.0.1.1, 1 : 10.0.1.2 }
+       }
+       chain postrouting {
+	     type filter hook postrouting priority 100;
+	     ip saddr 10.0.1.0/24 meta nftrace set 1 counter ip saddr set 172.20.16.28
+       }
+}

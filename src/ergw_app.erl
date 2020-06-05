@@ -20,10 +20,15 @@
 %%%===================================================================
 
 start(_StartType, _StartArgs) ->
+    logger:set_module_level(ergw_gtp_c_socket, debug),
+    logger:set_module_level(gtp_context_vnode, debug),
+    logger:set_module_level(ergw_context, debug),
     do([error_m ||
 	   gtp_config:init(),
 	   ergw_prometheus:declare(),
 	   ensure_jobs_queues(),
+	   riak_core:register([{vnode_module, gtp_context_vnode}]),
+	   riak_core_node_watcher:service_up(ergw, self()),
 	   Pid <- ergw_sup:start_link(),
 	   ergw_config:load_config(setup:get_all_env(ergw)),
 	   return(Pid)

@@ -357,7 +357,7 @@ handle_event(cast, {response, _, #pfcp{version = v1, type = heartbeat_response,
     {keep_state, Data, [next_heartbeat(Data)]};
 handle_event(cast, {response, _, #pfcp{version = v1, type = heartbeat_response, ie = _IEs}},
 	     {connected, _}, Data) ->
-    ?LOG(warning, "PFCP Fail Response: ~s", [pfcp_packet:pretty_print(_IEs)]),
+    ?LOG(error, "PFCP Fail Response: ~s", [pfcp_packet:pretty_print(_IEs)]),
     {next_state, dead, handle_nodedown(Data)};
 
 handle_event(cast, {response, from_cp_rule,

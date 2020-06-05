@@ -136,10 +136,10 @@ call(#gtp_port{pid = Handler}, Request) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init(#{name := Name, ip := IP, burst_size := BurstSize} = SocketOpts) ->
+init(#{name := Name, ip := SocketIP, burst_size := BurstSize} = SocketOpts) ->
     process_flag(trap_exit, true),
 
-    {ok, Socket} = ergw_gtp_socket:make_gtp_socket(IP, ?GTP1c_PORT, SocketOpts),
+    {ok, Socket} = ergw_gtp_socket:make_gtp_socket(SocketIP, ?GTP1c_PORT, SocketOpts),
     {ok, RCnt} = gtp_config:get_restart_counter(),
     VRF = case SocketOpts of
 	      #{vrf := VRF0} when is_binary(VRF0) ->
@@ -147,12 +147,13 @@ init(#{name := Name, ip := IP, burst_size := BurstSize} = SocketOpts) ->
 	      _ -> vrf:normalize_name(Name)
 	  end,
 
+    SrvIP = maps:get(cluster_ip, SocketOpts, SocketIP),
     GtpPort = #gtp_port{
 		 name = Name,
 		 vrf = VRF,
 		 type = maps:get(type, SocketOpts, 'gtp-c'),
 		 pid = self(),
-		 ip = IP,
+		 ip = SrvIP,
 		 restart_counter = RCnt
 		},
 
@@ -160,7 +161,7 @@ init(#{name := Name, ip := IP, burst_size := BurstSize} = SocketOpts) ->
 
     State = #state{
 	       gtp_port = GtpPort,
-	       ip = IP,
+	       ip = SrvIP,
 	       socket = Socket,
 	       burst_size = BurstSize,
 
@@ -258,10 +259,12 @@ handle_info({timeout, TRef, requests}, #state{requests = Requests} = State) ->
 handle_info({timeout, TRef, responses}, #state{responses = Responses} = State) ->
     {noreply, State#state{responses = ergw_cache:expire(TRef, Responses)}};
 
-handle_info({'$socket', Socket, select, Info}, #state{socket = Socket} = State) ->
+handle_info({'$socket', Socket, select, Info} = S, #state{socket = Socket} = State) ->
+    ?LOG(debug, "handle_info: ~p", [S]),
     handle_input(Socket, Info, State);
 
-handle_info({'$socket', Socket, abort, Info}, #state{socket = Socket} = State) ->
+handle_info({'$socket', Socket, abort, Info} = S, #state{socket = Socket} = State) ->
+    ?LOG(debug, "handle_info: ~p", [S]),
     handle_input(Socket, Info, State);
 
 handle_info(Info, State) ->

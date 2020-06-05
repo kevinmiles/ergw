@@ -30,10 +30,14 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    {ok, {{one_for_one, 5, 10}, [?CHILD(gtp_path_reg, worker, []),
+    VMaster = {gtp_context_vnode_master,
+	       {riak_core_vnode_master, start_link, [gtp_context_vnode]},
+	       permanent, 5000, worker, [riak_core_vnode_master]},
+
+    {ok, {{one_for_one, 5, 10}, [
+				 ?CHILD(gtp_path_reg, worker, []),
 				 ?CHILD(gtp_path_sup, supervisor, []),
-				 ?CHILD(gtp_context_reg, worker, []),
-				 ?CHILD(gtp_context_sup, supervisor, []),
+				 ?CHILD(gtp_context_sup_sup, supervisor, []),
 				 ?CHILD(tdf_sup, supervisor, []),
 				 ?CHILD(ergw_socket_reg, worker, []),
 				 ?CHILD(ergw_socket_sup, supervisor, []),
@@ -42,5 +46,6 @@ init([]) ->
 				 ?CHILD(ergw_sx_node_mngr, worker, []),
 				 ?CHILD(gtp_proxy_ds, worker, []),
 				 ?CHILD(ergw_ip_pool_sup, supervisor, []),
-				 ?CHILD(ergw, worker, [])
+				 ?CHILD(ergw, worker, []),
+				 VMaster
 				]} }.
