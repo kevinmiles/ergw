@@ -35,7 +35,7 @@
 %%% -----------------------------------------------------------------
 
 sx_report(#pfcp{type = session_report_request, seid = SEID} = Report) ->
-    apply2context({seid, SEID}, sx_report, [Report]).
+    apply2context(#{tag => seid, value => SEID}, sx_report, [Report]).
 
 %% port_message/2
 port_message(Request, Msg) ->
@@ -43,10 +43,10 @@ port_message(Request, Msg) ->
     ok.
 
 %% port_message/3
-port_message(Keys, #request{gtp_port = GtpPort} = Request, Msg)
-  when is_list(Keys) ->
-    Contexts = gtp_context_reg:match_keys(GtpPort, Keys),
-    port_message_ctx(Contexts, Request, Msg).
+port_message(Keys0, #request{gtp_port = #gtp_port{name = Name}} = Request, Msg)
+  when is_list(Keys0) ->
+    Keys = [{Name, Key} || Key <- Keys0],
+    apply2context(Keys, port_message, [Request, Msg, false]).
 
 %% port_message/4
 port_message(Key, Request, Msg, Resent) ->
@@ -56,14 +56,28 @@ port_message(Key, Request, Msg, Resent) ->
 %%%  internal functions
 %%%=========================================================================
 
-apply2context(Key, F, A) ->
-    case gtp_context_reg:lookup(Key) of
-	{Handler, Server} when is_atom(Handler), is_pid(Server) ->
-	    apply(Handler, F, [Server | A]);
+apply2context(RecordId, F, A) when is_binary(RecordId) ->
+    case ergw_nudsf:get(block, RecordId, 1) of
+	{ok, Context} ->
+	    apply2context(RecordId, Context, F, A);
 	_Other ->
-	    ?LOG(debug, "unable to find context ~p", [Key]),
+	    ?LOG(debug, "unable to find context ~p", [RecordId]),
+	    {error, not_found}
+    end;
+
+apply2context(Filter, F, A) when is_map(Filter) ->
+    case ergw_nudsf:search(Filter) of
+	{ok, _, [RecordId]} ->
+	    apply2context(RecordId, F, A);
+	_Other ->
+	    ?LOG(debug, "unable to find context ~p", [Filter]),
 	    {error, not_found}
     end.
+
+apply2context(RecordId, #{handler := Handler} = Context, F, A) ->
+    apply(Handler, F, [RecordId] ++ A ++ [Context]);
+apply2context(_RecordId, _Context, _F, _A) ->
+    {error, not_found}.
 
 port_request_key(#request{key = ReqKey, gtp_port = GtpPort}) ->
     gtp_context:port_key(GtpPort, ReqKey).
@@ -108,12 +122,6 @@ port_message_p(#request{gtp_port = GtpPort} = Request, #gtp{tei = TEI} = Msg) ->
 	Result ->
 	    Result
     end.
-
-port_message_ctx([{Handler, Server} | _], Request, Msg)
-  when is_atom(Handler), is_pid(Server) ->
-    Handler:port_message(Server, Request, Msg, false);
-port_message_ctx(_, _Request, _Msg) ->
-    throw({error, not_found}).
 
 load_class(#gtp{version = v1} = Msg) ->
     gtp_v1_c:load_class(Msg);

@@ -30,7 +30,8 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    {ok, {{one_for_one, 5, 10}, [?CHILD(gtp_path_reg, worker, []),
+    {ok, {{one_for_one, 5, 10}, [?CHILD(ergw_nudsf, worker, []),
+				 ?CHILD(gtp_path_reg, worker, []),
 				 ?CHILD(gtp_path_sup, supervisor, []),
 				 ?CHILD(gtp_context_reg, worker, []),
 				 ?CHILD(gtp_context_sup, supervisor, []),
