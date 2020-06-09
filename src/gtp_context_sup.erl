@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, new/6, new/7]).
+-export([start_link/0, new/6, new/7, all/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -35,6 +35,9 @@ new(Sup, Port, Registry, Version, Interface, IfOpts, Opts) ->
     ?LOG(debug, "new(~p)", [[Sup, Port, Registry, Version, Interface, IfOpts, Opts]]),
     supervisor:start_child(Sup, [Port, Registry, Version, Interface, IfOpts, Opts]).
 
+all(Sup) ->
+    supervisor:which_children(Sup).
+
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
@@ -42,7 +45,7 @@ new(Sup, Port, Registry, Version, Interface, IfOpts, Opts) ->
 init([]) ->
     Flags = #{strategy => simple_one_for_one, intensity => 5, period => 10},
     Spec = #{id =>       gtp_context,
-	     start =>    {gtp_context_sup, start_link, []},
+	     start =>    {gtp_context, start_link, []},
 	     restart =>  temporary,
 	     shutdown => 1000,
 	     type =>     worker,

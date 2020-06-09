@@ -37,7 +37,9 @@ init([]) ->
     {ok, {{one_for_one, 5, 10}, [
 				 ?CHILD(gtp_path_reg, worker, []),
 				 ?CHILD(gtp_path_sup, supervisor, []),
+				 ?CHILD(gtp_global_context_reg, worker, []),
 				 ?CHILD(gtp_context_sup_sup, supervisor, []),
+				 ?CHILD(gtp_context_coverage_fsm_sup, supervisor, []),
 				 ?CHILD(tdf_sup, supervisor, []),
 				 ?CHILD(ergw_socket_reg, worker, []),
 				 ?CHILD(ergw_socket_sup, supervisor, []),

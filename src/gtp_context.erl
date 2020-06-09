@@ -597,16 +597,30 @@ usage_report_to_accounting(undefined) ->
 ping() ->
     ping(os:timestamp()).
 
+%% gtp_context:ping(imsi).
+ping(imsi) ->
+    logger:set_module_level(?MODULE, debug),
+    ping({imsi,<<"240010123456789">>});
+
 ping(Key)->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     DocIdx = hash_key(Key),
-    {PrefList, _} = riak_core_apl:get_primary_apl(DocIdx, 2, ergw),
+    ?LOG(debug, "DocIdx: ~p", [DocIdx]),
+    PrefList = riak_core_apl:get_apl(DocIdx, 1, ergw),
     ?LOG(debug, "PrefList: ~p", [PrefList]),
+    ?LOG(debug, "Primary PrefList: ~p", [riak_core_apl:get_primary_apl(DocIdx, 2, ergw)]),
+    UpNodes = riak_core_node_watcher:nodes(ergw),
+    ?LOG(debug, "APL PrefList Ann 2: ~p", [riak_core_apl:get_apl_ann(DocIdx, 2, UpNodes)]),
+    ?LOG(debug, "APL PrefList Ann 1: ~p", [riak_core_apl:get_apl_ann(DocIdx, 1, UpNodes)]),
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
     ?LOG(debug, "Ring Index: ~p", [chashbin:responsible_index(DocIdx, CHBin)]),
     ?LOG(debug, "Ring Index: ~p", [chashbin:responsible_index(DocIdx, CHBin)]),
     ?LOG(debug, "Ring Pos: ~p", [chashbin:responsible_position(DocIdx, CHBin)]),
     ?LOG(debug, "Ring Pos: ~p", [chashbin:responsible_position(DocIdx, CHBin)]),
     ?LOG(debug, "Index N: ~p", [riak_core_util:get_index_n({<<"gtp_context">>, term_to_binary(Key)})]),
+    ?LOG(debug, "CHBin List: ~p", [chashbin:to_list(CHBin)]),
+    ?LOG(debug, "Full PrefList: ~p", [riak_core_ring:preflist(DocIdx, Ring)]),
+
     IndexNode = hd(PrefList),
     Command = ping,
     riak_core_vnode_master:sync_spawn_command(IndexNode, Command, gtp_context_vnode_master).

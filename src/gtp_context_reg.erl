@@ -19,6 +19,7 @@
 	 await_unreg/2]).
 -export([all/1]).
 -export([alloc_tei/2, lookup_tei/3]).
+-export([is_empty/1, handoff_command/3, handoff_data/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -27,6 +28,7 @@
 %% Include files
 %% --------------------------------------------------------------------
 -include_lib("kernel/include/logger.hrl").
+-include_lib("stdlib/include/ms_transform.hrl").
 -include("include/ergw.hrl").
 
 -record(state, {partition, tid, prefix, pids, await_unreg}).
@@ -113,6 +115,26 @@ lookup_tei(Registry, Port, TEI) ->
 %% lookup_tei/4
 lookup_tei(Registry, _Name, TEI, KeyFun) ->
     lookup(Registry, KeyFun(TEI)).
+
+is_empty({_, TID}) ->
+    ?LOG(info, "ETS Size ~p -> ~p", [TID, ets:info(TID, size)]),
+    ets:info(TID, size) == 0.
+
+handoff_command({_, TID}, FoldFun, AccIn) ->
+    MS = ets:fun2ms(fun({{_,tei}, _} = V) -> V end),
+    ?LOG(info, "ETS select ~p -> ~p", [TID, ets:select(TID, MS)]),
+    ?LOG(info, "ETS all ~p -> ~p", [TID, ets:tab2list(TID)]),
+    handoff_command_fold(ets:select(TID, MS, 1), FoldFun, AccIn).
+
+handoff_command_fold('$end_of_table', _, Acc) ->
+    Acc;
+handoff_command_fold({[{Key, Val}], Cont}, FoldFun, AccIn) ->
+    AccOut = FoldFun(Key, rand:export_seed_s(Val), AccIn),
+    handoff_command_fold(ets:select(Cont), FoldFun, AccOut).
+
+handoff_data({_, TID}, Key, Data) ->
+    ets:insert(TID, {Key, rand:seed(Data)}),
+    ok.
 
 %%%===================================================================
 %%% regine callbacks

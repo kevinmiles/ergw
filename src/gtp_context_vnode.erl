@@ -29,9 +29,10 @@
 	 handle_exit/3]).
 
 %% gtp_context API
--export([port_message/2]).
+-export([port_message/2, all/0]).
 
 -include_lib("kernel/include/logger.hrl").
+-include_lib("riak_core/include/riak_core_vnode.hrl").
 -include_lib("gtplib/include/gtp_packet.hrl").
 -include("include/ergw.hrl").
 
@@ -53,15 +54,29 @@ port_message(Request, #gtp{tei = TEID} = Msg)
     ?LOG(debug, "Prefix: ~p", [Prefix]),
     Idx = riak_core_ring_util:partition_id_to_hash(Prefix, NumPartitions),
     Owner = chashbin:index_owner(Idx, CHBin),
-    port_message({Idx, Owner}, Request, Msg);
+    PrefList = [{{Idx, Owner}, primary}],
+    port_message(PrefList, Request, Msg);
 
 port_message(Request, #gtp{tei = 0} = Msg0) ->
     Msg = gtp_packet:decode_ies(Msg0),
     Key = context_key(Msg),
     ?LOG(debug, "TEID 0 Key: ~p", [Key]),
     DocIdx = riak_core_util:chash_key({<<"gtp_context">>, term_to_binary(Key)}),
-    PrefList = riak_core_apl:get_apl(DocIdx, 1, ergw),
-    port_message(hd(PrefList), Request, Msg).
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 2, ergw),
+    port_message(PrefList, Request, Msg).
+
+%% port message/3
+port_message([], _Request, _Msg) ->
+    throw({error, not_found});
+port_message([{IndexNode,_} = H|T], Request, Msg) ->
+    ?LOG(debug, "IndexNode: ~p", [H]),
+    Command = {port_message, Request, Msg},
+    case riak_core_vnode_master:sync_spawn_command(IndexNode, Command, gtp_context_vnode_master) of
+	{error, not_found} ->
+	    port_message(T, Request, Msg);
+	Other ->
+	    Other
+    end.
 
 %%====================================================================
 %% riak API
@@ -88,7 +103,23 @@ handle_command(Message, _Sender, State) ->
     log("unhandled_command ~p", [Message], State),
     {noreply, State}.
 
+handle_handoff_command(?FOLD_REQ{foldfun = FoldFun, acc0 = Acc0}, _Sender,
+		       #state{reg = Registry} = State) ->
+    log("fold req ~p", [self()], State),
+    RegFoldFun = fun(K, V, A) -> FoldFun({reg, K}, V, A) end,
+    AccFinal = gtp_context_reg:handoff_command(Registry, RegFoldFun, Acc0),
+	%% lists:foldl(
+	%%   fun ({{_,tei} = Key, Val}, AccIn) ->
+	%% 	  log("fold fun ~p: ~p (~p)", [Key, rand:export_seed_s(Val), Val], State),
+	%% 	  FoldFun(Key, rand:export_seed_s(Val), AccIn);
+	%%       ({Key, Val}, AccIn) ->
+	%% 	  log("fold skip ~p: ~p", [Key, Val], State),
+	%% 	  AccIn
+	%%   end, Acc0, gtp_context_reg:all(Registry)),
+    {reply, AccFinal, State};
+
 handle_handoff_command(_Message, _Sender, State) ->
+    log("handle_handoff_command(~p, ~p)", [_Message, _Sender], State),
     {noreply, State}.
 
 handoff_starting(_TargetNode, State) ->
@@ -100,24 +131,34 @@ handoff_cancelled(State) ->
 handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
+handle_handoff_data(Bin, State) when is_binary(Bin) ->
+    log("handoff data received ~p", [binary_to_term(Bin)], State),
+    handle_handoff_data(binary_to_term(Bin), State);
+
+handle_handoff_data({{reg, Key}, Data}, #state{reg = Registry} = State) ->
+    Reply = gtp_context_reg:handoff_data(Registry, Key, Data),
+    {reply, Reply, State};
 handle_handoff_data(_Data, State) ->
+    log("unhandled handoff: ~p", [_Data], State),
     {reply, ok, State}.
 
-encode_handoff_item(_ObjectName, _ObjectValue) ->
-    <<>>.
+encode_handoff_item(Key, Value) ->
+    term_to_binary({Key, Value}).
 
 handle_overload_command(_, _, _) ->
     ok.
 handle_overload_info(_, _Idx) ->
     ok.
 
-is_empty(#state{ctx = CtxSup} = State) ->
-    IsEmpty = (supervisor:which_children(CtxSup) =:= []),
-    {IsEmpty, State}.
+is_empty(#state{reg = Registry} = State) ->
+    {gtp_context_reg:is_empty(Registry), State}.
 
 delete(State) ->
     {ok, State}.
 
+handle_coverage(all, _KeySpaces, {_, RefId, _}, #state{reg = Registry} = State) ->
+    Contexts = gtp_context_reg:all(Registry),
+    {reply, {RefId, Contexts}, State};
 handle_coverage(_Req, _KeySpaces, _Sender, State) ->
     {stop, not_implemented, State}.
 
@@ -167,28 +208,42 @@ port_message(#request{gtp_port = GtpPort} = Request,
 	{error, _} = Error ->
 	    {reply, Error, State}
     end;
+
+port_message(#request{gtp_port = GtpPort} = Request,
+	     #gtp{tei = TEI} = Msg, Sender, State)
+  when is_integer(TEI), TEI /= 0 ->
+    port_message([gtp_context:port_teid_key(GtpPort, TEI)],
+		 Request, Msg, Sender, State);
+
 port_message(_Request, _Msg, _Sender, State) ->
     {reply, {error, not_found}, State}.
 
-port_message([], _Request, _Msg, Sender, State) ->
+port_message([], _Request, _Msg, _Sender, State) ->
     {reply, {error, not_found}, State};
 port_message([Key|T], Request, Msg, Sender, #state{reg = Registry} = State) ->
     log("lookup for ~p", [Key], State),
+    log("all ~p", [gtp_context_reg:all(Registry)], State),
     case gtp_context_reg:lookup(Registry, Key) of
-	Server when is_pid(Server) ->
+	{_, Server} when is_pid(Server) ->
 	    Reply = port_message(Server, Request, Msg, false, Sender, State),
 	    {reply, Reply, State};
 	_ ->
 	    port_message(T, Request, Msg, Sender, State)
     end.
 
+%% port_message/6
 port_message(Server, Request, #gtp{type = g_pdu} = Msg, Resent, _Sender, _State) ->
     gtp_context:port_message(Server, Request, Msg, Resent);
-port_message(Server, Request, Msg, Resent, _Sender, #state{reg = Registry}) ->
+port_message(Server, Request, Msg, Resent, _Sender, #state{reg = Registry} = State) ->
+    log("Server: ~p", [Server], State),
     if not Resent -> gtp_context:register_request(?MODULE, Server, Request, Registry);
        true       -> ok
     end,
     gtp_context:port_message(Server, Request#request{reg = Registry}, Msg, Resent).
+
+
+all() ->
+    gtp_context_coverage_fsm:start(all, 1000).
 
 %%====================================================================
 %% Context Helpers
@@ -231,12 +286,6 @@ context_key(#gtp{version = v2} = Msg) ->
 
 context_key_1([{Type, Id, _}]) ->
     {Type, Id}.
-
-%% port message/3
-port_message(IndexNode, Request, Msg) ->
-    ?LOG(debug, "IndexNode: ~p", [IndexNode]),
-    Command = {port_message, Request, Msg},
-    riak_core_vnode_master:sync_spawn_command(IndexNode, Command, gtp_context_vnode_master).
 
 -if(TBD).
 
