@@ -104,13 +104,13 @@ port_message_h(Request, #gtp{} = Msg) ->
 
 port_message_run(Request, #gtp{type = g_pdu} = Msg) ->
     port_message_p(Request, Msg);
-port_message_run(Request, Msg0) ->
-    Msg = gtp_packet:decode_ies(Msg0),
-    case port_message(port_request_key(Request), Request, Msg, true) of
-	{error, not_found} ->
+port_message_run(Request, Msg) ->
+    %% check if this request is already pending
+    case gtp_context_reg:lookup(port_request_key(Request)) of
+	undefined ->
 	    port_message_p(Request, Msg);
-	Result ->
-	    Result
+	_ ->
+	    ok
     end.
 
 port_message_p(#request{} = Request, #gtp{tei = 0} = Msg) ->
