@@ -20,6 +20,8 @@
 	 pcc_ctx_to_credit_request/1,
 	 modify_sgi_session/5,
 	 delete_sgi_session/3,
+	 release_cntl_endp/1,
+	 release_data_endp/2,
 	 query_usage_report/2, query_usage_report/3,
 	 choose_context_ip/3,
 	 ip_pdu/3]).
@@ -107,6 +109,14 @@ query_usage_report(ChargingKeys, Ctx, PCtx)
     IEs = [#query_urr{group = [#urr_id{id = Id}]} ||
 	   Id <- ergw_pfcp:get_urr_ids(ChargingKeys, PCtx), is_integer(Id)],
     session_modification_request(PCtx, IEs, Ctx).
+
+release_cntl_endp(#context{control_port = Port, local_control_tei = TEI} = Context) ->
+    ergw_tei_mngr:release_tei(Port, TEI),
+    Context#context{control_port = undefined, local_control_tei = undefined}.
+
+release_data_endp(#context{local_data_endp = #gtp_endp{teid = TEI}} = Context, PCtx) ->
+    ergw_tei_mngr:release_tei(PCtx, TEI),
+    Context#context{local_data_endp = undefined}.
 
 %%%===================================================================
 %%% Helper functions

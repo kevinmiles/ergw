@@ -592,8 +592,9 @@ encode_eua(Org, Number, IPv4, IPv6) ->
 		      pdp_type_number = Number,
 		      pdp_address = <<IPv4/binary, IPv6/binary >>}.
 
-close_pdp_context(Reason, #{context := Context, pfcp := PCtx, 'Session' := Session}) ->
-    URRs = ergw_gsn_lib:delete_sgi_session(Reason, Context, PCtx),
+close_pdp_context(Reason, #{context := Context0, pfcp := PCtx, 'Session' := Session}) ->
+    URRs = ergw_gsn_lib:delete_sgi_session(Reason, Context0, PCtx),
+    Context = ergw_gsn_lib:release_data_endp(Context0, PCtx),
 
     %% ===========================================================================
 

@@ -777,8 +777,9 @@ encode_paa(IPv4, IPv6) when IPv4 /= undefined, IPv6 /= undefined ->
 encode_paa(Type, IPv4, IPv6) ->
     #v2_pdn_address_allocation{type = Type, address = <<IPv6/binary, IPv4/binary>>}.
 
-close_pdn_context(Reason, #{context := Context, pfcp := PCtx, 'Session' := Session}) ->
-    URRs = ergw_gsn_lib:delete_sgi_session(Reason, Context, PCtx),
+close_pdn_context(Reason, #{context := Context0, pfcp := PCtx, 'Session' := Session}) ->
+    URRs = ergw_gsn_lib:delete_sgi_session(Reason, Context0, PCtx),
+    Context = ergw_gsn_lib:release_data_endp(Context0, PCtx),
 
     %% ===========================================================================
 
