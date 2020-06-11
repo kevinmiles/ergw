@@ -21,7 +21,8 @@
 	 search/1,
 	 create/3, create/4,
 	 put/3, put/4,
-	 delete/2, delete/3]).
+	 delete/2, delete/3,
+	 all/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -77,7 +78,6 @@ put(block, RecordId, BlockId, Block) ->
 put(meta, RecordId, Meta) ->
     gen_server:call(?SERVER, {put, meta, RecordId, Meta}).
 
-
 %% TS 29.598, 5.2.2.5 Delete
 
 delete(record, RecordId) ->
@@ -85,6 +85,9 @@ delete(record, RecordId) ->
 
 delete(block, RecordId, BlockId) ->
     gen_server:call(?SERVER, {delete, block, RecordId, BlockId}).
+
+all() ->
+    gen_server:call(?SERVER, all).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -132,8 +135,15 @@ handle_call({get, block, _, _}, _Form, State) ->
     {reply, Reply, State};
 
 handle_call({search, Filter}, _Form, State) ->
-    ResM = maps:filter(search(_, _, Filter), State),
-    {reply, maps:keys(ResM), State};
+    try
+	ResM = maps:filter(search(_, _, Filter), State),
+	{reply, maps:keys(ResM), State}
+    catch
+	Class:Error:ST ->
+	    ?LOG(error, "Nudsf search failed with ~p:~p (~p)",
+		 [Class, Error, ST]),
+	    {reply, {error, invalid_filter}, State}
+    end;
 
 handle_call({create, record, RecordId, _, _, _}, _Form, State)
   when is_map_key(RecordId, State) ->
@@ -219,6 +229,9 @@ handle_call({delete, block, RecordId, BlockId}, _Form, State0)
 handle_call({delete, block, _, _}, _Form, State) ->
     Reply = {error, not_found},
     {reply, Reply, State};
+
+handle_call(all, _From, State) ->
+    {reply, State, State};
 
 handle_call(Request, _From, State) ->
     Reply = {error, {badarg, Request}},

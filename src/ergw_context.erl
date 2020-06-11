@@ -8,7 +8,8 @@
 -module(ergw_context).
 
 %% API
--export([sx_report/1, port_message/2, port_message/3, port_message/4]).
+-export([sx_report/1, port_message/2, port_message/3,
+	 create_context_record/3, get_context_record/1]).
 
 %%-type ctx_ref() :: {Handler :: atom(), Server :: pid()}.
 -type seid() :: 0..16#ffffffffffffffff.
@@ -29,13 +30,18 @@
 
 -callback port_message(Request :: #request{}, Msg :: #gtp{}) -> ok.
 
--callback port_message(Server :: pid(), Request :: #request{},
+-callback port_message(RecordId :: binary(), Request :: #request{},
 		       Msg :: #gtp{}, Resent :: boolean()) -> ok.
 
 %%% -----------------------------------------------------------------
 
+%% TBD: use some kind of register?
+handler(sx) -> ergw_sx_node;
+handler(gtp) -> gtp_context;
+handler(tdf) -> tdf.
+
 sx_report(#pfcp{type = session_report_request, seid = SEID} = Report) ->
-    apply2context(#{tag => seid, value => SEID}, sx_report, [Report]).
+    apply2context(sx, #{tag => seid, value => SEID}, sx_report, [Report]).
 
 %% port_message/2
 port_message(Request, Msg) ->
@@ -46,38 +52,53 @@ port_message(Request, Msg) ->
 port_message(Keys0, #request{gtp_port = #gtp_port{name = Name}} = Request, Msg)
   when is_list(Keys0) ->
     Keys = [{Name, Key} || Key <- Keys0],
-    apply2context(Keys, port_message, [Request, Msg, false]).
+    ct:pal("Keys: ~p~nNudf: ~p", [Keys, ergw_nudsf:all()]),
+    apply2context(gtp, Keys, port_message, [Request, Msg, false]).
 
-%% port_message/4
-port_message(Key, Request, Msg, Resent) ->
-    apply2context(Key, port_message, [Request, Msg, Resent]).
+%%%===================================================================
+%%% Nudsf support
+%%%===================================================================
+
+create_context_record(State, Meta, #{record_id := RecordId} = Data) ->
+    Serialized = serialize_block(#{state => State, data => Data}),
+    ergw_nudsf:create(RecordId, Meta, #{<<"context">> => Serialized});
+create_context_record(_, _, _) ->
+    ok.
+
+get_context_record(RecordId) ->
+    case ergw_nudsf:get(block, RecordId, <<"context">>) of
+	{ok, BlockBin} ->
+	    case  deserialize_block(BlockBin) of
+		#{state := State, data := Data} ->
+		    {ok, State, Data};
+		_ ->
+		    {error, not_found}
+	    end;
+	_ ->
+	    {error, not_found}
+    end.
+
+serialize_block(Data) ->
+    term_to_binary(Data, [{minor_version, 2}, compressed]).
+
+deserialize_block(Data) ->
+    binary_to_term(Data, [safe]).
 
 %%%=========================================================================
 %%%  internal functions
 %%%=========================================================================
 
-apply2context(RecordId, F, A) when is_binary(RecordId) ->
-    case ergw_nudsf:get(block, RecordId, 1) of
-	{ok, Context} ->
-	    apply2context(RecordId, Context, F, A);
-	_Other ->
-	    ?LOG(debug, "unable to find context ~p", [RecordId]),
-	    {error, not_found}
-    end;
-
-apply2context(Filter, F, A) when is_map(Filter) ->
+apply2context(Type, Filter, F, A) when is_map(Filter) ->
+    %% TBD: query the local cache/registry first....
+    ct:pal("Filter: ~p~nNudf: ~p~nSearch: ~p",
+	   [Filter, ergw_nudsf:all(), (catch ergw_nudsf:search(Filter))]),
     case ergw_nudsf:search(Filter) of
-	{ok, _, [RecordId]} ->
-	    apply2context(RecordId, F, A);
+	[RecordId] ->
+	    apply(handler(Type), F, [RecordId] ++ A);
 	_Other ->
-	    ?LOG(debug, "unable to find context ~p", [Filter]),
+	    ?LOG(debug, "unable to find context ~p -> ~p", [Filter, _Other]),
 	    {error, not_found}
     end.
-
-apply2context(RecordId, #{handler := Handler} = Context, F, A) ->
-    apply(Handler, F, [RecordId] ++ A ++ [Context]);
-apply2context(_RecordId, _Context, _F, _A) ->
-    {error, not_found}.
 
 port_request_key(#request{key = ReqKey, gtp_port = GtpPort}) ->
     gtp_context:port_key(GtpPort, ReqKey).
@@ -104,19 +125,24 @@ port_message_h(Request, #gtp{} = Msg) ->
 
 port_message_run(Request, #gtp{type = g_pdu} = Msg) ->
     port_message_p(Request, Msg);
-port_message_run(Request, Msg) ->
+port_message_run(Request, Msg0) ->
     %% check if this request is already pending
     case gtp_context_reg:lookup(port_request_key(Request)) of
 	undefined ->
+	    ?LOG(info, "NO DUPLICATE REQEST"),
+	    Msg = gtp_packet:decode_ies(Msg0),
 	    port_message_p(Request, Msg);
-	_ ->
+	_Other ->
+	    %% TBD.....
+	    ct:pal("DUPLICATE REQUEST: ~p", [_Other]),
 	    ok
     end.
 
 port_message_p(#request{} = Request, #gtp{tei = 0} = Msg) ->
     gtp_context:port_message(Request, Msg);
 port_message_p(#request{gtp_port = GtpPort} = Request, #gtp{tei = TEI} = Msg) ->
-    case port_message(gtp_context:port_teid_key(GtpPort, TEI), Request, Msg, false) of
+    Filter = gtp_context:port_teid_filter(GtpPort, TEI),
+    case apply2context(gtp, Filter, port_message, [Request, Msg, false]) of
 	{error, _} = Error ->
 	    throw(Error);
 	Result ->

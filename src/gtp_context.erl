@@ -14,7 +14,7 @@
 -compile({parse_transform, do}).
 
 -export([handle_response/4,
-	 start_link/5,
+	 start_link/4, start_link/5,
 	 send_request/7,
 	 send_response/2, send_response/3,
 	 send_request/6, resend_request/2,
@@ -28,7 +28,8 @@
 	 validate_options/3,
 	 validate_option/2,
 	 generic_error/3,
-	 port_key/2, port_teid_key/2]).
+	 port_key/2, port_teid_key/2,
+	 port_teid_filter/2]).
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
 
@@ -76,6 +77,9 @@ resend_request(GtpPort, ReqId) ->
 
 start_link(GtpPort, Version, Interface, IfOpts, Opts) ->
     gen_statem:start_link(?MODULE, [GtpPort, Version, Interface, IfOpts], Opts).
+
+start_link(RecordId, State, Data, Opts) ->
+    gen_statem:start_link(?MODULE, [RecordId, State, Data], Opts).
 
 path_restart(Context, Path) ->
     jobs:run(path_restart, fun() -> gen_statem:call(Context, {path_restart, Path}) end).
@@ -287,7 +291,7 @@ port_message(#request{gtp_port = GtpPort} = Request,
 	    end,
 	    validate_teid(Msg),
 	    Server = context_new(GtpPort, Version, Interface, InterfaceOpts),
-	    port_message(Server, Request, Msg, false);
+	    handle_port_message(Server, Request, Msg, false);
 
 	{error, _} = Error ->
 	    throw(Error)
@@ -295,19 +299,42 @@ port_message(#request{gtp_port = GtpPort} = Request,
 port_message(_Request, _Msg) ->
     throw({error, not_found}).
 
-port_message(Server, Request, #gtp{type = g_pdu} = Msg, _Resent) ->
-    gen_statem:cast(Server, {handle_pdu, Request, Msg});
-port_message(Server, Request, Msg, Resent) ->
+handle_port_message(Server, Request, Msg, Resent) when is_pid(Server) ->
     if not Resent -> register_request(?MODULE, Server, Request);
        true       -> ok
     end,
     gen_statem:cast(Server, {handle_message, Request, Msg, Resent}).
+
+port_message(RecordId, Request, #gtp{type = g_pdu} = Msg, _Resent)
+  when is_binary(RecordId) ->
+    %%    gen_statem:cast(Server, {handle_pdu, Request, Msg});
+    context_run(RecordId, cast, {handle_pdu, Request, Msg});
+port_message(RecordId, Request, Msg, Resent)
+  when is_binary(RecordId) ->
+    EvFun = fun(Server, _) -> handle_port_message(Server, Request, Msg, Resent) end,
+    context_run(RecordId, EvFun, undefined).
 
 %%====================================================================
 %% gen_statem API
 %%====================================================================
 
 callback_mode() -> [handle_event_function, state_enter].
+
+init([RecordId]) ->
+    process_flag(trap_exit, true),
+
+    case gtp_context_reg:register_name(RecordId, self()) of
+	yes ->
+	    case ergw_context:get_context_record(RecordId) of
+		{ok, _State, _Data} = Result ->
+		    Result;
+		Other ->
+		    {stop, Other}
+	    end;
+	no ->
+	    Pid = gtp_context_reg:whereis_name(RecordId),
+	    {stop, {error, {already_started, Pid}}}
+    end;
 
 init([CntlPort, Version, Interface,
       #{node_selection := NodeSelect,
@@ -318,8 +345,13 @@ init([CntlPort, Version, Interface,
 
     {ok, CntlTEI} = ergw_tei_mngr:alloc_tei(CntlPort),
 
+    Id = ergw_gtp_c_socket:get_uniq_id(CntlPort),
+    RecordId = iolist_to_binary(["GTP-", integer_to_list(Id)]),
+
+    gtp_context_reg:register_name(RecordId, self()),
+
     Context = #context{
-		 charging_identifier = ergw_gtp_c_socket:get_uniq_id(CntlPort),
+		 charging_identifier = Id,
 
 		 version           = Version,
 		 control_interface = Interface,
@@ -328,13 +360,39 @@ init([CntlPort, Version, Interface,
 		},
 
     Data = #{
+      record_id      => RecordId,
       context        => Context,
       version        => Version,
       interface      => Interface,
       node_selection => NodeSelect,
       aaa_opts       => AAAOpts},
 
-    Interface:init(Opts, Data).
+    case init_it(Interface, Opts, Data) of
+	{ok, {ok, State, FinalData} = Result} ->
+	    Meta = get_context_meta(Data),
+	    ergw_context:create_context_record(State, Meta, FinalData),
+	    Result;
+	InitR ->
+	    gtp_context_reg:unregister_name(RecordId),
+	    case InitR of
+		{ok, {stop, _} = R} ->
+		    R;
+		{ok, ignore} ->
+		    ignore;
+		{ok, Else} ->
+		    exit({bad_return_value, Else});
+		{'EXIT', Class, Reason, Stacktrace} ->
+		    erlang:raise(Class, Reason, Stacktrace)
+	    end
+    end.
+
+init_it(Mod, Opts, Data) ->
+    try
+	{ok, Mod:init(Opts, Data)}
+    catch
+	throw:R -> {ok, R};
+	Class:R:S -> {'EXIT', Class, R, S}
+    end.
 
 handle_event({call, From}, info, _, Data) ->
     {keep_state_and_data, [{reply, From, Data}]};
@@ -541,6 +599,30 @@ context_new(GtpPort, Version, Interface, InterfaceOpts) ->
 	    throw({error, Error})
     end.
 
+context_run(RecordId, EventType, EventContent) ->
+    case gtp_context_reg:whereis_name(RecordId) of
+	Pid when is_pid(Pid) ->
+	    context_run_do(Pid, EventType, EventContent);
+	_ ->
+	    case gtp_context_sup:run(RecordId) of
+		{ok, Pid2} ->
+		    context_run_do(Pid2, EventType, EventContent);
+		{already_started, Pid3} ->
+		    context_run_do(Pid3, EventType, EventContent);
+		Other ->
+		    Other
+	    end
+    end.
+
+context_run_do(Server, cast, EventContent) ->
+    gen_statem:cast(Server, EventContent);
+context_run_do(Server, call, EventContent) ->
+    gen_statem:call(Server, EventContent);
+context_run_do(Server, info, EventContent) ->
+    Server ! EventContent;
+context_run_do(Server, Fun, EventContent) when is_function(Fun) ->
+    Fun(Server, EventContent).
+
 validate_teid(#gtp{version = v1, type = MsgType, tei = TEID}) ->
     gtp_v1_c:validate_teid(MsgType, TEID);
 validate_teid(#gtp{version = v2, type = MsgType, tei = TEID}) ->
@@ -551,11 +633,13 @@ validate_message(#gtp{version = Version, ie = IEs} = Msg, Data) ->
 		v1 -> gtp_v1_c:get_cause(IEs);
 		v2 -> gtp_v2_c:get_cause(IEs)
 	    end,
+    ?LOG(error, "Msg: ~p", [Msg]),
     case validate_ies(Msg, Cause, Data) of
 	[] ->
 	    ok;
 	Missing ->
 	    ?LOG(debug, "Missing IEs: ~p", [Missing]),
+	    ?LOG(error, "Missing IEs: ~p", [Missing]),
 	    throw(?CTX_ERR(?WARNING, [{mandatory_ie_missing, hd(Missing)}]))
     end.
 
@@ -573,6 +657,53 @@ validate_ies(#gtp{version = Version, type = MsgType, ie = IEs}, Cause, #{interfa
 %%====================================================================
 %% context registry
 %%====================================================================
+
+get_context_meta(#{context := Context}) ->
+    Tags = context2tags(Context),
+    #{tags => Tags}.
+
+context2tags(#context{
+		apn                 = APN,
+		context_id          = ContextId,
+		control_port        = #gtp_port{name = Name},
+		local_control_tei   = LocalCntlTEID,
+		remote_control_teid = RemoteCntlTEID,
+		vrf                 = #vrf{name = VRF},
+		ms_v4               = MSv4,
+		ms_v6               = MSv6
+	       }) ->
+    #{type => 'gtp-c',
+      port => Name,
+      local_control_tei => LocalCntlTEID,
+      remote_control_tei => RemoteCntlTEID,
+      context_id => ContextId,
+      dnn => APN,
+      ip_domain => VRF,
+      ipv4 => MSv4,
+      ipv6 => MSv6};
+context2tags(#context{
+		context_id          = ContextId,
+		control_port        = #gtp_port{name = Name},
+		local_control_tei   = LocalCntlTEID,
+		remote_control_teid = RemoteCntlTEID
+	       }) ->
+    #{type => 'gtp-c',
+      port => Name,
+      local_control_tei => LocalCntlTEID,
+      remote_control_tei => RemoteCntlTEID,
+      context_id => ContextId}.
+
+port_teid_filter(#gtp_port{type = Type} = Port, TEI) ->
+    port_teid_filter(Port, Type, TEI).
+
+port_teid_filter(#gtp_port{name = Name}, Type, TEI) ->
+    #{'cond' => 'AND',
+      units =>
+	  [
+	   #{tag => type, value => Type},
+	   #{tag => port, value => Name},
+	   #{tag => local_control_tei, value => TEI}
+	  ]}.
 
 context2keys(#context{
 		apn                 = APN,
