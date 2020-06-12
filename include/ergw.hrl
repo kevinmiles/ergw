@@ -83,6 +83,11 @@
 	  teid			:: non_neg_integer()
 	 }).
 
+-record(c_state, {
+	  fsm                   :: atom(),
+	  session               :: atom()
+	 }).
+
 -record(context, {
 	  apn                    :: [binary()],
 	  imsi                   :: 'undefined' | binary(),

@@ -9,7 +9,9 @@
 
 %% API
 -export([sx_report/1, port_message/2, port_message/3,
-	 create_context_record/3, get_context_record/1]).
+	 create_context_record/3,
+	 put_context_record/2,
+	 get_context_record/1]).
 
 %%-type ctx_ref() :: {Handler :: atom(), Server :: pid()}.
 -type seid() :: 0..16#ffffffffffffffff.
@@ -61,9 +63,11 @@ port_message(Keys0, #request{gtp_port = #gtp_port{name = Name}} = Request, Msg)
 
 create_context_record(State, Meta, #{record_id := RecordId} = Data) ->
     Serialized = serialize_block(#{state => State, data => Data}),
-    ergw_nudsf:create(RecordId, Meta, #{<<"context">> => Serialized});
-create_context_record(_, _, _) ->
-    ok.
+    ergw_nudsf:create(RecordId, Meta, #{<<"context">> => Serialized}).
+
+put_context_record(State, #{record_id := RecordId} = Data) ->
+    Serialized = serialize_block(#{state => State, data => Data}),
+    ergw_nudsf:put(block, RecordId, <<"context">>, Serialized).
 
 get_context_record(RecordId) ->
     case ergw_nudsf:get(block, RecordId, <<"context">>) of

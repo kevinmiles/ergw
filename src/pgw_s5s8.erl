@@ -102,12 +102,13 @@ validate_options(Options) ->
 validate_option(Opt, Value) ->
     gtp_context:validate_option(Opt, Value).
 
-init(_Opts, Data) ->
+init(_Opts, Data0) ->
     {ok, Session} = ergw_aaa_session_sup:new_session(self(), to_session([])),
     SessionOpts = ergw_aaa_session:get(Session),
     OCPcfg = maps:get('Offline-Charging-Profile', SessionOpts, #{}),
     PCC = #pcc_ctx{offline_charging_profile = OCPcfg},
-    {ok, run, Data#{'Version' => v2, 'Session' => Session, pcc => PCC}}.
+    Data = Data0#{'Version' => v2, 'Session' => Session, pcc => PCC},
+    {ok,  #c_state{session = up, fsm = init}, Data}.
 
 handle_event(Type, Content, State, #{'Version' := v1} = Data) ->
     ?GTP_v1_Interface:handle_event(Type, Content, State, Data);
@@ -115,27 +116,27 @@ handle_event(Type, Content, State, #{'Version' := v1} = Data) ->
 handle_event(enter, _OldState, _State, _Data) ->
     keep_state_and_data;
 
-handle_event({call, From}, delete_context, run, Data) ->
-    delete_context(From, administrative, Data);
-handle_event({call, From}, delete_context, shutdown, _Data) ->
+handle_event({call, From}, delete_context, #c_state{session = up} = State, Data) ->
+    delete_context(From, administrative, State, Data);
+handle_event({call, From}, delete_context, #c_state{session = shutdown}, _Data) ->
     {keep_state_and_data, [{reply, From, {ok, ok}}]};
 handle_event({call, _From}, delete_context, _State, _Data) ->
     {keep_state_and_data, [postpone]};
 
-handle_event({call, From}, terminate_context, _State, Data) ->
+handle_event({call, From}, terminate_context, State, Data) ->
     close_pdn_context(normal, Data),
-    {next_state, shutdown, Data, [{reply, From, ok}]};
+    gtp_context:next_state_shutdown(State, Data, [{reply, From, ok}]);
 
-handle_event({call, From}, {path_restart, Path}, _State,
+handle_event({call, From}, {path_restart, Path}, State,
 	     #{context := #context{path = Path}} = Data) ->
     close_pdn_context(normal, Data),
-    {next_state, shutdown, Data, [{reply, From, ok}]};
+    gtp_context:next_state_shutdown(State, Data, [{reply, From, ok}]);
 
 handle_event({call, From}, {path_restart, _Path}, _State, _Data) ->
     {keep_state_and_data, [{reply, From, ok}]};
 
-handle_event(cast, {defered_usage_report, URRActions, UsageReport}, _State,
-	    #{pfcp := PCtx, 'Session' := Session}) ->
+handle_event(cast, {defered_usage_report, URRActions, UsageReport}, State,
+	    #{pfcp := PCtx, 'Session' := Session} = Data) ->
     Now = erlang:monotonic_time(),
     case proplists:get_value(offline, URRActions) of
 	{ChargeEv, OldS} ->
@@ -145,33 +146,34 @@ handle_event(cast, {defered_usage_report, URRActions, UsageReport}, _State,
 	_ ->
 	    ok
     end,
-    keep_state_and_data;
+    gtp_context:keep_state_idle(State, Data);
 
-handle_event(cast, delete_context, run, Data) ->
-    delete_context(undefined, administrative, Data);
+handle_event(cast, delete_context, #c_state{session = up} = State, Data) ->
+    delete_context(undefined, administrative, State, Data);
 handle_event(cast, delete_context, _State, _Data) ->
     keep_state_and_data;
 
-handle_event(cast, {packet_in, _GtpPort, _IP, _Port, _Msg}, _State, _Data) ->
+handle_event(cast, {packet_in, _GtpPort, _IP, _Port, _Msg}, State, Data) ->
     ?LOG(warning, "packet_in not handled (yet): ~p", [_Msg]),
-    keep_state_and_data;
+    gtp_context:keep_state_idle(State, Data);
 
-handle_event(info, {'DOWN', _MonitorRef, Type, Pid, _Info}, _State,
+handle_event(info, {'DOWN', _MonitorRef, Type, Pid, _Info}, State,
 	    #{pfcp := #pfcp_ctx{node = Pid}} = Data)
   when Type == process; Type == pfcp ->
     close_pdn_context(upf_failure, Data),
-    {next_state, shutdown, Data};
+    gtp_context:next_state_shutdown(State, Data);
 
-handle_event(info, #aaa_request{procedure = {_, 'ASR'}} = Request, run, Data) ->
+handle_event(info, #aaa_request{procedure = {_, 'ASR'}} = Request,
+	     #c_state{session = up} = State, Data) ->
     ergw_aaa_session:response(Request, ok, #{}, #{}),
-    delete_context(undefined, administrative, Data);
-handle_event(info, #aaa_request{procedure = {_, 'ASR'}} = Request, _State, _Data) ->
+    delete_context(undefined, administrative, State, Data);
+handle_event(info, #aaa_request{procedure = {_, 'ASR'}} = Request, State, Data) ->
     ergw_aaa_session:response(Request, ok, #{}, #{}),
-    keep_state_and_data;
+    gtp_context:keep_state_idle(State, Data);
 
 handle_event(info, #aaa_request{procedure = {gx, 'RAR'},
 				events = Events} = Request,
-	     run,
+	     #c_state{session = up} = State,
 	     #{context := Context, pfcp := PCtx0,
 	       'Session' := Session, pcc := PCC0} = Data) ->
 %%% 1. update PCC
@@ -227,11 +229,11 @@ handle_event(info, #aaa_request{procedure = {gx, 'RAR'},
 
     GxReport = ergw_gsn_lib:pcc_events_to_charging_rule_report(PCCErrors2 ++ PCCErrors4),
     ergw_aaa_session:response(Request, ok, GxReport, #{}),
-    {keep_state, Data#{pfcp := PCtx, pcc := PCC4}};
+    gtp_context:keep_state_idle(State, Data#{pfcp := PCtx, pcc := PCC4});
 
 handle_event(info, #aaa_request{procedure = {gy, 'RAR'},
 				events = Events} = Request,
-	     run, Data) ->
+	     #c_state{session = up} = State, Data) ->
     ergw_aaa_session:response(Request, ok, #{}, #{}),
     Now = erlang:monotonic_time(),
 
@@ -244,29 +246,29 @@ handle_event(info, #aaa_request{procedure = {gy, 'RAR'},
 		undefined
 	end,
     triggered_charging_event(interim, Now, ChargingKeys, Data),
-    keep_state_and_data;
+    gtp_context:keep_state_idle(State, Data);
 
-handle_event(info, #aaa_request{procedure = {_, 'RAR'}} = Request, _State, _Data) ->
+handle_event(info, #aaa_request{procedure = {_, 'RAR'}} = Request, State, Data) ->
     ergw_aaa_session:response(Request, {error, unknown_session}, #{}, #{}),
-    keep_state_and_data;
+    gtp_context:keep_state_idle(State, Data);
 
-handle_event(info, {pfcp_timer, #{validity_time := ChargingKeys}}, _State, Data) ->
+handle_event(info, {pfcp_timer, #{validity_time := ChargingKeys}}, State, Data) ->
     Now = erlang:monotonic_time(),
     triggered_charging_event(validity_time, Now, ChargingKeys, Data),
-    keep_state_and_data;
+    gtp_context:keep_state_idle(State, Data);
 
 handle_event(info, _Info, _State, _Data) ->
     keep_state_and_data;
 
-handle_event({timeout, context_idle}, stop_session, _state, Data) ->
-    delete_context(undefined, normal, Data);
+handle_event({timeout, context_idle}, stop_session, State, Data) ->
+    delete_context(undefined, normal, State, Data);
 
-handle_event(internal, {session, stop, _Session}, run, Data) ->
-    delete_context(undefined, normal, Data);
+handle_event(internal, {session, stop, _Session}, #c_state{session = up} = State, Data) ->
+    delete_context(undefined, normal, State, Data);
 handle_event(internal, {session, stop, _Session}, _, _) ->
     keep_state_and_data;
 
-handle_event(internal, {session, {update_credits, _} = CreditEv, _}, _State,
+handle_event(internal, {session, {update_credits, _} = CreditEv, _}, State,
 	     #{context := Context, pfcp := PCtx0, pcc := PCC0} = Data) ->
     Now = erlang:monotonic_time(),
 
@@ -274,7 +276,7 @@ handle_event(internal, {session, {update_credits, _} = CreditEv, _}, _State,
     {PCtx, _} =
 	ergw_gsn_lib:modify_sgi_session(PCC, [], #{}, Context, PCtx0),
 
-    {keep_state, Data#{pfcp := PCtx, pcc := PCC}};
+    gtp_context:keep_state_idle(State, Data#{pfcp := PCtx, pcc := PCC});
 
 handle_event(internal, {session, Ev, _}, _State, _Data) ->
     ?LOG(error, "unhandled session event: ~p", [Ev]),
@@ -351,7 +353,7 @@ handle_request(ReqKey,
 					FqDataTEID
 				   }}
 			  } = IEs} = Request,
-	       _Resent, _State,
+	       _Resent, State,
 	       #{context := Context0, aaa_opts := AAAopts, node_selection := NodeSelect,
 		 'Session' := Session, pcc := PCC0} = Data) ->
 
@@ -450,7 +452,8 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    {keep_state, Data#{context => Context, pfcp => PCtx, pcc => PCC4}, Actions};
+    gtp_context:keep_state_idle(State, Data#{context => Context,
+					     pfcp => PCtx, pcc => PCC4}, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = modify_bearer_request,
@@ -464,7 +467,7 @@ handle_request(ReqKey,
 					FqDataTEID
 				   }}
 			  } = IEs} = Request,
-	       _Resent, _State,
+	       _Resent, State,
 	       #{context := OldContext, pfcp := PCtx, 'Session' := Session} = Data0) ->
 
     process_secondary_rat_usage_data_reports(IEs, OldContext, Session),
@@ -510,11 +513,11 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    {keep_state, Data1, Actions};
+    gtp_context:keep_state_idle(State, Data1, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = modify_bearer_request, ie = IEs} = Request,
-	       _Resent, _State,
+	       _Resent, State,
 	       #{context := OldContext, pfcp := PCtx,
 		 'Session' := Session} = Data) ->
     process_secondary_rat_usage_data_reports(IEs, OldContext, Session),
@@ -528,7 +531,7 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    {keep_state, Data#{context => Context}, Actions};
+    gtp_context:keep_state_idle(State, Data#{context => Context}, Actions);
 
 handle_request(#request{gtp_port = GtpPort, ip = SrcIP, port = SrcPort} = ReqKey,
 	       #gtp{type = modify_bearer_command,
@@ -537,8 +540,8 @@ handle_request(#request{gtp_port = GtpPort, ip = SrcIP, port = SrcPort} = ReqKey
 			   ?'Bearer Contexts to be modified' :=
 			       #v2_bearer_context{
 				   group = #{?'EPS Bearer ID' := EBI} = Bearer}} = IEs},
-	       _Resent, _State,
-	       #{context := Context, pfcp := PCtx, 'Session' := Session}) ->
+	       _Resent, State,
+	       #{context := Context, pfcp := PCtx, 'Session' := Session} = Data) ->
     URRActions = update_session_from_gtp_req(IEs, Session, Context),
     trigger_defered_usage_report(URRActions, PCtx),
 
@@ -551,11 +554,11 @@ handle_request(#request{gtp_port = GtpPort, ip = SrcIP, port = SrcPort} = ReqKey
     send_request(GtpPort, SrcIP, SrcPort, ?T3, ?N3, Msg#gtp{seq_no = SeqNo}, ReqKey),
 
     Actions = context_idle_action([], Context),
-    {keep_state_and_data, Actions};
+    gtp_context:keep_state_idle(State, Data, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = change_notification_request, ie = IEs} = Request,
-	       _Resent, _State,
+	       _Resent, State,
 	       #{context := OldContext, pfcp := PCtx,
 		 'Session' := Session} = Data) ->
     process_secondary_rat_usage_data_reports(IEs, OldContext, Session),
@@ -570,11 +573,11 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    {keep_state, Data#{context => Context}, Actions};
+    gtp_context:keep_state_idle(State, Data#{context => Context}, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = suspend_notification} = Request,
-	       _Resent, _State, #{context := Context} = Data) ->
+	       _Resent, State, #{context := Context} = Data) ->
 
     %% don't do anything special for now
 
@@ -583,11 +586,11 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    {keep_state, Data#{context => Context}, Actions};
+    gtp_context:keep_state_idle(State, Data#{context => Context}, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = resume_notification} = Request,
-	       _Resent, _State, #{context := Context} = Data) ->
+	       _Resent, State, #{context := Context} = Data) ->
 
     %% don't do anything special for now
 
@@ -596,11 +599,11 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    {keep_state, Data#{context => Context}, Actions};
+    gtp_context:keep_state_idle(State, Data#{context => Context}, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = delete_session_request, ie = IEs} = Request,
-	       _Resent, _State, #{context := Context, 'Session' := Session} = Data0) ->
+	       _Resent, State, #{context := Context, 'Session' := Session} = Data0) ->
 
     FqTEI = maps:get(?'Sender F-TEID for Control Plane', IEs, undefined),
 
@@ -616,17 +619,17 @@ handle_request(ReqKey,
 	    close_pdn_context(normal, Data),
 	    Response = response(delete_session_response, Context, ReplyIEs),
 	    gtp_context:send_response(ReqKey, Request, Response),
-	    {next_state, shutdown, Data};
+	    gtp_context:next_state_shutdown(State, Data);
 
 	{error, ReplyIEs} ->
 	    Response = response(delete_session_response, Context, ReplyIEs),
 	    gtp_context:send_response(ReqKey, Request, Response),
-	    keep_state_and_data
+	    gtp_context:keep_state_idle(State, Data0)
     end;
 
-handle_request(ReqKey, _Msg, _Resent, _State, _Data) ->
+handle_request(ReqKey, _Msg, _Resent, State, Data) ->
     gtp_context:request_finished(ReqKey),
-    keep_state_and_data.
+    gtp_context:keep_state_idle(State, Data).
 
 handle_response(ReqInfo, #gtp{version = v1} = Msg, Request, State, Data) ->
     ?GTP_v1_Interface:handle_response(ReqInfo, Msg, Request, State, Data);
@@ -638,7 +641,7 @@ handle_response(CommandReqKey,
 				#v2_bearer_context{
 				   group = #{?'Cause' := #v2_cause{v2_cause = BearerCause}}
 				  }} = IEs} = Response,
-		_Request, run,
+		_Request, #c_state{session = up} = State,
 		#{context := Context0, pfcp := PCtx,
 		  'Session' := Session} = Data0) ->
     gtp_context:request_finished(CommandReqKey),
@@ -648,29 +651,30 @@ handle_response(CommandReqKey,
     if Cause =:= request_accepted andalso BearerCause =:= request_accepted ->
 	    URRActions = update_session_from_gtp_req(IEs, Session, Context),
 	    trigger_defered_usage_report(URRActions, PCtx),
-	    {keep_state, Data};
+	    gtp_context:keep_state_idle(State, Data);
        true ->
 	    ?LOG(error, "Update Bearer Request failed with ~p/~p",
 			[Cause, BearerCause]),
-	    delete_context(undefined, link_broken, Data)
+	    delete_context(undefined, link_broken, State, Data)
     end;
 
-handle_response(_, timeout, #gtp{type = update_bearer_request}, run, Data) ->
+handle_response(_, timeout, #gtp{type = update_bearer_request},
+		#c_state{session = up} = State,  Data) ->
     ?LOG(error, "Update Bearer Request failed with timeout"),
-    delete_context(undefined, link_broken, Data);
+    delete_context(undefined, link_broken, State, Data);
 
 handle_response({From, TermCause}, timeout, #gtp{type = delete_bearer_request},
-		_State, Data) ->
+		State, Data) ->
     close_pdn_context(TermCause, Data),
     if is_tuple(From) -> gen_statem:reply(From, {error, timeout});
        true -> ok
     end,
-    {next_state, shutdown, Data};
+    gtp_context:next_state_shutdown(State, Data);
 
 handle_response({From, TermCause},
 		#gtp{type = delete_bearer_response,
 		     ie = #{?'Cause' := #v2_cause{v2_cause = RespCause}} = IEs} = Response,
-		_Request, _State,
+		_Request, State,
 		#{context := Context0, 'Session' := Session} = Data) ->
     Context = gtp_path:bind(Response, false, Context0),
     process_secondary_rat_usage_data_reports(IEs, Context, Session),
@@ -678,10 +682,10 @@ handle_response({From, TermCause},
     if is_tuple(From) -> gen_statem:reply(From, {ok, RespCause});
        true -> ok
     end,
-    {next_state, shutdown, Data#{context := Context}};
+    gtp_context:next_state_shutdown(State, Data#{context := Context});
 
-handle_response(_CommandReqKey, _Response, _Request, State, _Data)
-  when State =/= run ->
+handle_response(_CommandReqKey, _Response, _Request, #c_state{session = State}, _Data)
+  when State =/= up ->
     keep_state_and_data.
 
 terminate(_Reason, _State, #{context := Context}) ->
@@ -691,6 +695,7 @@ terminate(_Reason, _State, #{context := Context}) ->
 %%%===================================================================
 %%% Helper functions
 %%%===================================================================
+
 ip2prefix({IP, Prefix}) ->
     <<Prefix:8, (ergw_inet:ip2bin(IP))/binary>>.
 
@@ -779,7 +784,7 @@ encode_paa(Type, IPv4, IPv6) ->
 
 close_pdn_context(Reason, #{context := Context0, pfcp := PCtx, 'Session' := Session}) ->
     URRs = ergw_gsn_lib:delete_sgi_session(Reason, Context0, PCtx),
-    Context = ergw_gsn_lib:release_data_endp(Context0, PCtx),
+    ergw_gsn_lib:release_data_endp(Context0, PCtx),
 
     %% ===========================================================================
 
@@ -1211,14 +1216,15 @@ send_request(#context{control_port = GtpPort,
 send_request(Context, T3, N3, Type, RequestIEs, ReqInfo) ->
     send_request(Context, T3, N3, msg(Context, Type, RequestIEs), ReqInfo).
 
-delete_context(From, TermCause, #{context := Context} = Data) ->
+delete_context(From, TermCause, State, #{context := Context} = Data) ->
     Type = delete_bearer_request,
     EBI = 5,
     RequestIEs0 = [#v2_cause{v2_cause = reactivation_requested},
 		   #v2_eps_bearer_id{eps_bearer_id = EBI}],
     RequestIEs = gtp_v2_c:build_recovery(Type, Context, false, RequestIEs0),
     send_request(Context, ?T3, ?N3, Type, RequestIEs, {From, TermCause}),
-    {next_state, shutdown_initiated, Data}.
+    %% TBD....
+    gtp_context:next_state_shutdown(State, Data).
 
 allocate_ips(APNOpts, SOpts, PAA, DAF, Context) ->
     ergw_gsn_lib:allocate_ips(pdn_alloc(PAA), APNOpts, SOpts, DAF, Context).

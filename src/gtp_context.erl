@@ -32,6 +32,8 @@
 	 port_teid_filter/2]).
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
+-export([keep_state_idle/2, keep_state_idle/3,
+	 next_state_shutdown/2, next_state_shutdown/3]).
 
 %% ergw_context callbacks
 -export([sx_report/2, port_message/2, port_message/4]).
@@ -52,6 +54,9 @@
 -define(TestCmdTag, '$TestCmd').
 
 -import(ergw_aaa_session, [to_session/1]).
+
+-define(IDLE_TIMEOUT, 100).
+-define(IDLE_INIT_TIMEOUT, 5000).
 
 -define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
 
@@ -190,6 +195,31 @@ test_cmd(Pid, Cmd) when is_pid(Pid) ->
 enforce_restrictions(Msg, #context{restrictions = Restrictions} = Context) ->
     lists:foreach(fun(R) -> enforce_restriction(Context, Msg, R) end, Restrictions).
 
+next_state_shutdown(State, Data) ->
+    next_state_shutdown(State, Data, []).
+
+next_state_shutdown(State, Data, Actions) ->
+    % TODO unregiter context ....
+
+    %% this makes stop the last message in the inbox and
+    %% guarantees that we process any left over messages first
+    gen_statem:cast(self(), stop),
+    {next_state, State#c_state{session = shutdown, fsm = busy}, Data, Actions}.
+
+keep_state_idle(State, Data) ->
+    keep_state_idle(State, Data, []).
+
+keep_state_idle(#c_state{session = up} = State, Data, Actions) ->
+    {next_state, State#c_state{fsm = idle}, Data, Actions};
+keep_state_idle(_State, Data, Actions) ->
+    {keep_state, Data, Actions}.
+
+%% keep_state_busy(#c_state{session = up} = State, Data) ->
+%%     {next_state, State#c_state{fsm = busy}, Data};
+%% keep_state_busy(_State, Data) ->
+%%     {keep_state, Data}.
+
+
 %%%===================================================================
 %%% Options Validation
 %%%===================================================================
@@ -326,8 +356,8 @@ init([RecordId]) ->
     case gtp_context_reg:register_name(RecordId, self()) of
 	yes ->
 	    case ergw_context:get_context_record(RecordId) of
-		{ok, _State, _Data} = Result ->
-		    Result;
+		{ok, State, Data} ->
+		    {ok, #c_state{session = State, fsm = init}, Data};
 		Other ->
 		    {stop, Other}
 	    end;
@@ -368,10 +398,10 @@ init([CntlPort, Version, Interface,
       aaa_opts       => AAAOpts},
 
     case init_it(Interface, Opts, Data) of
-	{ok, {ok, State, FinalData} = Result} ->
+	{ok, {ok, #c_state{session = SState} = State, FinalData}} ->
 	    Meta = get_context_meta(Data),
-	    ergw_context:create_context_record(State, Meta, FinalData),
-	    Result;
+	    ergw_context:create_context_record(SState, Meta, FinalData),
+	    {ok, State, FinalData};
 	InitR ->
 	    gtp_context_reg:unregister_name(RecordId),
 	    case InitR of
@@ -404,16 +434,20 @@ handle_event({call, From}, {?TestCmdTag, session}, _State, #{'Session' := Sessio
 handle_event({call, From}, {?TestCmdTag, pcc_rules}, _State, #{pcc := PCC}) ->
     {keep_state_and_data, [{reply, From, {ok, PCC#pcc_ctx.rules}}]};
 
-handle_event(enter, _OldState, shutdown, _Data) ->
-    % TODO unregsiter context ....
+handle_event(state_timeout, idle, #c_state{fsm = init}, Data) ->
+    {stop, normal, Data};
+handle_event(state_timeout, idle, #c_state{session = SState, fsm = idle}, Data) ->
+    ergw_context:put_context_record(SState, Data),
+    ct:pal("Nudsf all: ~p", [ergw_nudsf:all()]),
+    {stop, normal, Data};
 
-    %% this makes stop the last message in the inbox and
-    %% guarantees that we process any left over messages first
-    gen_statem:cast(self(), stop),
-    keep_state_and_data;
-
-handle_event(cast, stop, shutdown, _Data) ->
+handle_event(cast, stop, #c_state{session = shutdown}, _Data) ->
     {stop, normal};
+
+handle_event(enter, _OldState, #c_state{fsm = init}, _Data) ->
+    {keep_state_and_data, [{state_timeout, ?IDLE_INIT_TIMEOUT, idle}]};
+handle_event(enter, _OldState, #c_state{fsm = idle}, _Data) ->
+    {keep_state_and_data, [{state_timeout, ?IDLE_TIMEOUT, idle}]};
 
 handle_event(enter, OldState, State, #{interface := Interface} = Data) ->
     Interface:handle_event(enter, OldState, State, Data);
@@ -423,15 +457,15 @@ handle_event({call, From}, {sx, Report}, State,
     ?LOG(debug, "~w: handle_call Sx: ~p", [?MODULE, Report]),
     case Interface:handle_sx_report(Report, State, Data0) of
 	{ok, Data} ->
-	    {keep_state, Data, [{reply, From, {ok, PCtx}}]};
+	    keep_state_idle(State, Data, [{reply, From, {ok, PCtx}}]);
 	{reply, Reply, Data} ->
-	    {keep_state, Data, [{reply, From, {ok, PCtx, Reply}}]};
+	    keep_state_idle(State, Data, [{reply, From, {ok, PCtx, Reply}}]);
 	{shutdown, Data} ->
-	    {next_state, shutdown, Data, [{reply, From, {ok, PCtx}}]};
+	    next_state_shutdown(State, Data, [{reply, From, {ok, PCtx}}]);
 	{error, Reply, Data} ->
-	    {keep_state, Data, [{reply, From, {ok, PCtx, Reply}}]};
+	    keep_state_idle(State, Data, [{reply, From, {ok, PCtx, Reply}}]);
 	{noreply, Data} ->
-	    {keep_state, Data}
+	    keep_state_idle(State, Data)
     end;
 
 handle_event(cast, {handle_message, Request, #gtp{} = Msg0, Resent}, State, Data) ->
