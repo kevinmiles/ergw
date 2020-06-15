@@ -9,23 +9,25 @@
 %% - functional API according to TS
 %% - not optimized for anything
 
--module(ergw_nudsf).
+-module(ergw_nudsf_ets).
 
 -behavior(gen_server).
+-behavior(ergw_nudsf_api).
 
 -compile({parse_transform, cut}).
 
 %% API
--export([start_link/0,
+-export([get_childspecs/0,
 	 get/2, get/3,
 	 search/1,
 	 create/3, create/4,
 	 put/3, put/4,
 	 delete/2, delete/3,
-	 all/0]).
+	 all/0,
+	 validate_options/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+-export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -37,8 +39,13 @@
 %%%  API
 %%%=========================================================================
 
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+get_childspecs() ->
+    [#{id       => ?MODULE,
+       start    => {?MODULE, start_link, []},
+       restart  => permanent,
+       shutdown =>  5000,
+       type     => worker,
+       modules  => [?MODULE]}].
 
 %% TS 29.598, 5.2.2.2 Query
 
@@ -90,8 +97,23 @@ all() ->
     gen_server:call(?SERVER, all).
 
 %%%===================================================================
+%%% Options Validation
+%%%===================================================================
+
+validate_options(Values) ->
+     ergw_config:validate_options(fun validate_option/2, Values, [], map).
+
+validate_option(handler, Value) ->
+    Value;
+validate_option(Opt, Value) ->
+    throw({error, {options, {Opt, Value}}}).
+
+%%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
+
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 init([]) ->
     process_flag(trap_exit, true),

@@ -23,6 +23,7 @@
 
 -define(DefaultOptions, [{plmn_id, {<<"001">>, <<"01">>}},
 			 {node_id, undefined},
+			 {udsf, [{handler, ergw_nudsf_ets}]},
 			 {accept_new, true},
 			 {sockets, []},
 			 {handlers, []},
@@ -52,8 +53,7 @@
 %%% API
 %%%===================================================================
 
-load_config(Config0) ->
-    Config = validate_config(Config0),
+load_config(Config) ->
     ergw:load_config(Config),
     lists:foreach(fun ergw:start_socket/1, proplists:get_value(sockets, Config)),
     maps:map(fun load_sx_node/2, proplists:get_value(nodes, Config)),
@@ -230,6 +230,8 @@ validate_option(accept_new, Value) when is_boolean(Value) ->
     Value;
 validate_option(sockets, Value) when ?is_opts(Value) ->
     ergw_socket:validate_options(Value);
+validate_option(udsf, Value) when is_list(Value); is_map(Value) ->
+    ergw_nudsf_api:validate_options(Value);
 validate_option(handlers, Value) when is_list(Value), length(Value) >= 1 ->
     check_unique_keys(handlers, without_opts(['gn', 's5s8'], Value)),
     validate_options(fun validate_handlers_option/2, Value);

@@ -1,4 +1,4 @@
-%% Copyright 2017, Travelping GmbH <info@travelping.com>
+%% Copyright 2017-2020, Travelping GmbH <info@travelping.com>
 
 %% This program is free software; you can redistribute it and/or
 %% modify it under the terms of the GNU General Public License
@@ -8,6 +8,8 @@
 -module(ergw_loader).
 
 -export([load/3]).
+
+-include_lib("kernel/include/logger.hrl").
 
 load(API, Module, Handler) ->
     Callbacks = API:behaviour_info(callbacks),
@@ -22,7 +24,7 @@ load(API, Module, Handler) ->
 				       handler_fun(Handler, Line, FunName, Arity)
 			       end, 3, Callbacks),
     Abstract = [{attribute, 1, module, Module},
-                {attribute, 2, export, Callbacks} | Body],
+		{attribute, 2, export, Callbacks} | Body],
 
     Opts0 = [debug_info, warnings_as_errors, binary],
     Opts = case Handler:module_info(native) of
@@ -32,7 +34,7 @@ load(API, Module, Handler) ->
     {ok, Module, HandlerModBin} = compile:forms(Abstract, Opts),
     {module, Module} = code:load_binary(Module, [], HandlerModBin),
 
-    lager:info("Handler ~s for ~s successfully installed.", [Handler, Module]),
+    ?LOG(info, "Handler ~s for ~s successfully installed.", [Handler, Module]),
     ok.
 
 handler_fun(Handler, Line, FunName, Arity) ->
@@ -49,4 +51,4 @@ handler_fun(Handler, Line, FunName, Arity) ->
     {Abstract, Line + 2}.
 
 gen_arglist(Line, Arity) ->
-        [ {var, Line, list_to_atom("Arg" ++ integer_to_list(N))} || N <- lists:seq(1, Arity)].
+    [ {var, Line, list_to_atom("Arg" ++ integer_to_list(N))} || N <- lists:seq(1, Arity)].

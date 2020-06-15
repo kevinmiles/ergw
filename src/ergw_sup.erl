@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, start_child/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -25,24 +25,28 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+start_child(ChildSpec) ->
+    supervisor:start_child(?MODULE, ChildSpec).
+
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
 init([]) ->
-    {ok, {{one_for_one, 5, 10}, [?CHILD(ergw_nudsf, worker, []),
-				 ?CHILD(ergw_tei_mngr, worker, [3, 6]),
-				 ?CHILD(gtp_path_reg, worker, []),
-				 ?CHILD(gtp_path_sup, supervisor, []),
-				 ?CHILD(gtp_context_reg, worker, []),
-				 ?CHILD(gtp_context_sup, supervisor, []),
-				 ?CHILD(tdf_sup, supervisor, []),
-				 ?CHILD(ergw_socket_reg, worker, []),
-				 ?CHILD(ergw_socket_sup, supervisor, []),
-				 ?CHILD(ergw_sx_node_reg, worker, []),
-				 ?CHILD(ergw_sx_node_sup, supervisor, []),
-				 ?CHILD(ergw_sx_node_mngr, worker, []),
-				 ?CHILD(gtp_proxy_ds, worker, []),
-				 ?CHILD(ergw_ip_pool_sup, supervisor, []),
-				 ?CHILD(ergw, worker, [])
-				]} }.
+    {ok, {{one_for_one, 5, 10},
+	  ergw_nudsf:get_childspecs() ++
+	      [?CHILD(ergw_tei_mngr, worker, [3, 6]),
+	       ?CHILD(gtp_path_reg, worker, []),
+	       ?CHILD(gtp_path_sup, supervisor, []),
+	       ?CHILD(gtp_context_reg, worker, []),
+	       ?CHILD(gtp_context_sup, supervisor, []),
+	       ?CHILD(tdf_sup, supervisor, []),
+	       ?CHILD(ergw_socket_reg, worker, []),
+	       ?CHILD(ergw_socket_sup, supervisor, []),
+	       ?CHILD(ergw_sx_node_reg, worker, []),
+	       ?CHILD(ergw_sx_node_sup, supervisor, []),
+	       ?CHILD(ergw_sx_node_mngr, worker, []),
+	       ?CHILD(gtp_proxy_ds, worker, []),
+	       ?CHILD(ergw_ip_pool_sup, supervisor, []),
+	       ?CHILD(ergw, worker, [])
+	      ]} }.
