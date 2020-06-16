@@ -25,7 +25,7 @@ start(_StartType, _StartArgs) ->
 	   gtp_config:init(),
 	   ergw_prometheus:declare(),
 	   ensure_jobs_queues(),
-	   Pid <- ergw_sup:start_link(),
+	   Pid <- ergw_sup:start_link(Config),
 	   ergw_config:load_config(Config),
 	   return(Pid)
        ]).

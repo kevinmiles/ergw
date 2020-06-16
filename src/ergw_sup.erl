@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_child/1]).
+-export([start_link/1, start_child/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -22,8 +22,8 @@
 %% API functions
 %% ===================================================================
 
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(Config) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [Config]).
 
 start_child(ChildSpec) ->
     supervisor:start_child(?MODULE, ChildSpec).
@@ -32,9 +32,9 @@ start_child(ChildSpec) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init([]) ->
+init([Config]) ->
     {ok, {{one_for_one, 5, 10},
-	  ergw_nudsf:get_childspecs() ++
+	  ergw_nudsf:get_childspecs(Config) ++
 	      [?CHILD(ergw_tei_mngr, worker, [3, 6]),
 	       ?CHILD(gtp_path_reg, worker, []),
 	       ?CHILD(gtp_path_sup, supervisor, []),

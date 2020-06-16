@@ -17,7 +17,7 @@
 -compile({parse_transform, cut}).
 
 %% API
--export([get_childspecs/0,
+-export([get_childspecs/1,
 	 get/2, get/3,
 	 search/1,
 	 create/3, create/4,
@@ -39,7 +39,7 @@
 %%%  API
 %%%=========================================================================
 
-get_childspecs() ->
+get_childspecs(_Config) ->
     [#{id       => ?MODULE,
        start    => {?MODULE, start_link, []},
        restart  => permanent,
@@ -295,7 +295,7 @@ search_expr('OR', [Expr|Units], Tags) ->
 search_expr('AND', [], _) ->
     true;
 search_expr('AND', [Expr|Units], Tags) ->
-    search_expr(Expr, Tags) andalso search_expr('OR', Units, Tags).
+    search_expr(Expr, Tags) andalso search_expr('AND', Units, Tags).
 
 search_cond(V1, V2, 'EQ')  -> V1 =:= V2;
 search_cond(V1, V2, 'NEQ') -> V1 =/= V2;

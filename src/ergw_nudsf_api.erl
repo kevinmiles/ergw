@@ -34,7 +34,7 @@
 
 -optional_callbacks([all/0]).
 
--callback get_childspecs() -> [supervisor:child_spec()].
+-callback get_childspecs(Config :: term()) -> [supervisor:child_spec()].
 
 %% TS 29.598, 5.2.2.2 Query
 
