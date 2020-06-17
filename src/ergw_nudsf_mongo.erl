@@ -18,7 +18,7 @@
 %% API
 -export([get_childspecs/1,
 	 get/2, get/3,
-	 search/1,
+	 search/1, search/2,
 	 create/3, create/4,
 	 put/3, put/4,
 	 delete/2, delete/3,
@@ -26,6 +26,13 @@
 	 validate_options/1]).
 
 -include_lib("kernel/include/logger.hrl").
+
+%%%=========================================================================
+%%%  mongo stuff
+%%%=========================================================================
+
+-include_lib("mongodb/include/mongoc.hrl").
+-include_lib("mongodb/include/mongo_protocol.hrl").
 
 -define(SERVER, ergw_nudsf_mongo_srv).
 -define(POOL, ergw_nudsf_mongo_pool).
@@ -116,6 +123,53 @@ get(block, RecordId, BlockId) ->
 %% TS 29.598, 5.2.2.2.6	Search
 
 search(Filter) ->
+    search(Filter, #{}).
+
+search(Filter, #{count := true}) ->
+    ?LOG(debug, "search(~p)", [Filter]),
+    Selector = search_expr(Filter),
+    ?LOG(debug, "search(..): ~p", [Selector]),
+    Count = mongo_api:count(?SERVER, <<"Nudfs">>, Selector, 0),
+    {Count, []};
+search(Filter, #{range := Range} = Opts) ->
+    ?LOG(debug, "search(~p, ~p)", [Filter, Opts]),
+    Selector = search_expr(Filter),
+    Page = maps:get(page, Opts, 1),
+    Ref = [{<<"$skip">>, (Page - 1) * Range}, {<<"$limit">>, Range},
+	   {<<"$group">>, #{<<"_id">> => null,
+			    <<"refs">> =>
+				#{<<"$push">> => <<"$$CURRENT._id">>}}}],
+
+    Pipeline = [
+		{<<"$match">>, Selector},
+		{<<"$facet">>, #{<<"count">> => [{<<"$count">>, <<"value">>}],
+				 <<"ref">>   => Ref}}
+	       ],
+    ?LOG(debug, "search(..): ~p", [Pipeline]),
+    case aggregate(?SERVER, <<"Nudfs">>, Pipeline) of
+	{ok, Cursor} = R ->
+	    ?LOG(debug, "search(..) -> ~p", [R]),
+	    Result =
+		case mc_cursor:rest(Cursor) of
+		    [#{<<"count">> := [#{<<"value">> := Count}],
+		       <<"ref">>   := [#{<<"refs">> := Refs}]}] ->
+			{Count, Refs};
+		    [#{<<"count">> := [],
+		       <<"ref">>   := [#{<<"refs">> := Refs}]}] ->
+			{0, Refs};
+		    _Other ->
+			?LOG(error, "MongoDB.find() failed with ~p", [_Other]),
+			{0, []}
+		end,
+	    mc_cursor:close(Cursor),
+	    ?LOG(debug, "search(..) -> ~p", [Result]),
+	    Result;
+	_Other ->
+	    ?LOG(debug, "get(..) -> ~p", [_Other]),
+	    ?LOG(error, "MongoDB.findOne() failed with ~p", [_Other]),
+	    {error, not_found}
+    end;
+search(Filter, _Opts) ->
     ?LOG(debug, "search(~p)", [Filter]),
     Selector = search_expr(Filter),
     Projection = #{<<"_id">> => 1},
@@ -133,13 +187,12 @@ search(Filter) ->
 		end,
 	    mc_cursor:close(Cursor),
 	    ?LOG(debug, "search(..) -> ~p", [Result]),
-	    Result;
+	    {length(Result), Result};
 	_Other ->
 	    ?LOG(debug, "get(..) -> ~p", [_Other]),
 	    ?LOG(error, "MongoDB.findOne() failed with ~p", [_Other]),
 	    {error, not_found}
     end.
-
 
 %% TS 29.598, 5.2.2.3 Create
 
@@ -314,3 +367,86 @@ search_cond(Tag, Value, 'GT', Query)  -> meta_tag_query(Tag, #{<<"$gt">> => Valu
 search_cond(Tag, Value, 'GTE', Query) -> meta_tag_query(Tag, #{<<"$gte">> => Value}, Query);
 search_cond(Tag, Value, 'LT', Query)  -> meta_tag_query(Tag, #{<<"$lt">> => Value}, Query);
 search_cond(Tag, Value, 'LTE', Query) -> meta_tag_query(Tag, #{<<"$lte">> => Value}, Query).
+
+%%%=========================================================================
+%%%  mongo API wrapper
+%%%=========================================================================
+
+-type pipeline() :: list().
+
+-spec aggregate(atom() | pid(), collection(), pipeline()) ->
+  {ok, cursor()} | [].
+aggregate(Topology, Collection, Pipeline) ->
+  mongoc:transaction_query(Topology,
+    fun(Conf = #{pool := Worker}) ->
+      Query = mongoc_aggregate_query(Conf, Collection, Pipeline),
+      mc_worker_api:find(Worker, Query)
+    end, #{}).
+
+%%%=========================================================================
+%%%  mongoc wrapper
+%%%=========================================================================
+
+-spec mongoc_aggregate_query(map(), collection(), pipeline()) -> query().
+mongoc_aggregate_query(#{server_type := ServerType, read_preference := RPrefs},
+		       Coll, Pipeline) ->
+    Command =
+	{<<"aggregate">>, mc_utils:value_to_binary(Coll),
+	 <<"pipeline">>, Pipeline,
+	 <<"cursor">>,   {} },
+    Q = #'query'{
+	   collection = <<"$cmd">>,
+	   selector = Command,
+	   batchsize = 1
+	  },
+    mongos_query_transform(ServerType, Q, RPrefs).
+
+%%%===================================================================
+%%% mongoc - Internal functions
+%%%===================================================================
+
+
+%% @private
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := primary}) ->
+  Q#'query'{selector = S, slaveok = false, sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := primaryPreferred, tags := []}) ->
+  Q#'query'{selector = S, slaveok = true, sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := primaryPreferred, tags := Tags}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"primaryPreferred">>, <<"tags">> => bson:document(Tags)}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := secondary, tags := []}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"secondary">>}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := secondary, tags := Tags}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"secondary">>, <<"tags">> => bson:document(Tags)}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := secondaryPreferred, tags := []}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"secondaryPreferred">>}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := secondaryPreferred, tags := Tags}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"secondaryPreferred">>, <<"tags">> => bson:document(Tags)}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := nearest, tags := []}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"nearest">>}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(mongos, #'query'{selector = S} = Q, #{mode := nearest, tags := Tags}) ->
+  Q#'query'{
+    selector = mongoc:append_read_preference(S, #{mode => <<"nearest">>, tags => bson:document(Tags)}),
+    slaveok = true,
+    sok_overriden = true};
+mongos_query_transform(_, Q, #{mode := primary}) ->
+  Q#'query'{slaveok = false, sok_overriden = true};
+mongos_query_transform(_, Q, _) ->
+  Q#'query'{slaveok = true, sok_overriden = true}.

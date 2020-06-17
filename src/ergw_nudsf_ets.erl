@@ -19,7 +19,7 @@
 %% API
 -export([get_childspecs/1,
 	 get/2, get/3,
-	 search/1,
+	 search/1, search/2,
 	 create/3, create/4,
 	 put/3, put/4,
 	 delete/2, delete/3,
@@ -64,7 +64,10 @@ get(block, RecordId, BlockId) ->
 %% TS 29.598, 5.2.2.2.6	Search
 
 search(Filter) ->
-    gen_server:call(?SERVER, {search, Filter}).
+    search(Filter, #{}).
+
+search(Filter, Opts) ->
+    gen_server:call(?SERVER, {search, Filter, Opts}).
 
 %% TS 29.598, 5.2.2.3 Create
 
@@ -156,10 +159,11 @@ handle_call({get, block, _, _}, _Form, State) ->
     Reply = {error, not_found},
     {reply, Reply, State};
 
-handle_call({search, Filter}, _Form, State) ->
+handle_call({search, Filter, Opts}, _Form, State) ->
     try
 	ResM = maps:filter(search(_, _, Filter), State),
-	{reply, maps:keys(ResM), State}
+	Reply = search_reply(ResM, Opts),
+	{reply, Reply, State}
     catch
 	Class:Error:ST ->
 	    ?LOG(error, "Nudsf search failed with ~p:~p (~p)",
@@ -274,6 +278,15 @@ code_change(_OldVsn, State, _Extra) ->
 %%%=========================================================================
 %%%  internal functions
 %%%=========================================================================
+
+search_reply(ResM, #{count := true}) ->
+    {maps:size(ResM), []};
+search_reply(ResM, #{range := Range} = Opts) ->
+    Page = maps:get(page, Opts, 1),
+    {ResL, _} = lists:split(Range, lists:nthtail((Range - 1) * Page, maps:keys(ResM))),
+    {maps:size(ResM), ResL};
+search_reply(ResM, _Opts) ->
+    {maps:size(ResM), maps:keys(ResM)}.
 
 search(_, #entry{meta = Meta}, Expr) ->
     search_expr(Expr, maps:get(tags, Meta, #{})).

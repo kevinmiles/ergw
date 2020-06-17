@@ -18,6 +18,9 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-type opts() :: #{page => non_neg_integer(),
+		  range => non_neg_integer(),
+		  count => boolean()}.
 -type tags() :: map().
 -type record_id() :: binary().
 -type block_id() :: binary().
@@ -47,7 +50,10 @@
 
 %% TS 29.598, 5.2.2.2.6	Search
 
--callback search(Filter :: filter()) -> [record_id()] | {error, Reason :: atom()}.
+-callback search(Filter :: filter()) ->
+    {Count :: non_neg_integer(), [record_id()]} | {error, Reason :: atom()}.
+-callback search(Filter :: filter(), Opts :: opts()) ->
+    {Count :: non_neg_integer(), [record_id()]} | {error, Reason :: atom()}.
 
 %% TS 29.598, 5.2.2.3 Create
 

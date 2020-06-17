@@ -97,7 +97,7 @@ apply2context(Type, Filter, F, A) when is_map(Filter) ->
     ct:pal("Filter: ~p~nNudf: ~p~nSearch: ~p",
 	   [Filter, ergw_nudsf:all(), (catch ergw_nudsf:search(Filter))]),
     case ergw_nudsf:search(Filter) of
-	[RecordId] ->
+	{1, [RecordId]} ->
 	    apply(handler(Type), F, [RecordId] ++ A);
 	_Other ->
 	    ?LOG(debug, "unable to find context ~p -> ~p", [Filter, _Other]),
