@@ -108,7 +108,7 @@ init(_Opts, Data0) ->
     OCPcfg = maps:get('Offline-Charging-Profile', SessionOpts, #{}),
     PCC = #pcc_ctx{offline_charging_profile = OCPcfg},
     Data = Data0#{'Version' => v2, 'Session' => Session, pcc => PCC},
-    {ok,  #c_state{session = up, fsm = init}, Data}.
+    {ok,  #c_state{session = init, fsm = init}, Data}.
 
 handle_event(Type, Content, State, #{'Version' := v1} = Data) ->
     ?GTP_v1_Interface:handle_event(Type, Content, State, Data);
@@ -452,8 +452,8 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    gtp_context:keep_state_idle(State, Data#{context => Context,
-					     pfcp => PCtx, pcc => PCC4}, Actions);
+    gtp_context:next_state_idle(State#c_state{session = up},
+				Data#{context => Context, pfcp => PCtx, pcc => PCC4}, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = modify_bearer_request,
@@ -688,7 +688,7 @@ handle_response(_CommandReqKey, _Response, _Request, #c_state{session = State}, 
   when State =/= up ->
     keep_state_and_data.
 
-terminate(_Reason, _State, #{context := Context}) ->
+terminate(_Reason, _State, #{context := Context} = Data) ->
     ergw_gsn_lib:release_context_ips(Context),
     ok.
 

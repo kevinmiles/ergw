@@ -102,7 +102,7 @@ init(_Opts, Data0) ->
     OCPcfg = maps:get('Offline-Charging-Profile', SessionOpts, #{}),
     PCC = #pcc_ctx{offline_charging_profile = OCPcfg},
     Data = Data0#{'Version' => v2, 'Session' => Session, pcc => PCC},
-    {ok,  #c_state{session = up, fsm = init}, Data}.
+    {ok,  #c_state{session = init, fsm = init}, Data}.
 
 handle_event(enter, _OldState, _State, _Data) ->
     keep_state_and_data;
@@ -327,7 +327,7 @@ handle_request(ReqKey,
 	       #gtp{type = create_pdp_context_request,
 		    ie = #{
 			   ?'Access Point Name' := #access_point_name{apn = APN}
-			  } = IEs} = Request, _Resent, State,
+			  } = IEs} = Request, _Resent, #c_state{session = init} = State,
 	       #{context := Context0, aaa_opts := AAAopts, node_selection := NodeSelect,
 		 'Session' := Session, pcc := PCC0} = Data) ->
 
@@ -418,8 +418,8 @@ handle_request(ReqKey,
     gtp_context:send_response(ReqKey, Request, Response),
 
     Actions = context_idle_action([], Context),
-    gtp_context:keep_state_idle(State, Data#{context => Context,
-					     pfcp => PCtx, pcc => PCC4}, Actions);
+    gtp_context:next_state_idle(State#c_state{session = up},
+				Data#{context => Context, pfcp => PCtx, pcc => PCC4}, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = update_pdp_context_request,

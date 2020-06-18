@@ -11,7 +11,8 @@
 -export([sx_report/1, port_message/2, port_message/3,
 	 create_context_record/3,
 	 put_context_record/2,
-	 get_context_record/1]).
+	 get_context_record/1,
+	 delete_context_record/1]).
 
 %%-type ctx_ref() :: {Handler :: atom(), Server :: pid()}.
 -type seid() :: 0..16#ffffffffffffffff.
@@ -81,6 +82,11 @@ get_context_record(RecordId) ->
 	_ ->
 	    {error, not_found}
     end.
+
+delete_context_record(#{record_id := RecordId} = Data) ->
+    ergw_nudsf:delete(record, RecordId);
+delete_context_record(_Data) ->
+    {error, not_found}.
 
 serialize_block(Data) ->
     term_to_binary(Data, [{minor_version, 2}, compressed]).

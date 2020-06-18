@@ -14,7 +14,7 @@
 -compile({parse_transform, do}).
 
 -export([handle_response/4,
-	 start_link/4, start_link/5,
+	 start_link/2, start_link/4, start_link/5,
 	 send_request/7,
 	 send_response/2, send_response/3,
 	 send_request/6, resend_request/2,
@@ -33,6 +33,7 @@
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
 -export([keep_state_idle/2, keep_state_idle/3,
+	 next_state_idle/2, next_state_idle/3,
 	 next_state_shutdown/2, next_state_shutdown/3]).
 
 %% ergw_context callbacks
@@ -79,6 +80,9 @@ send_request(GtpPort, DstIP, DstPort, ReqId, Msg, ReqInfo) ->
 
 resend_request(GtpPort, ReqId) ->
     ergw_gtp_c_socket:resend_request(GtpPort, ReqId).
+
+start_link(RecordId, Opts) ->
+    gen_statem:start_link(?MODULE, [RecordId], Opts).
 
 start_link(GtpPort, Version, Interface, IfOpts, Opts) ->
     gen_statem:start_link(?MODULE, [GtpPort, Version, Interface, IfOpts], Opts).
@@ -213,6 +217,14 @@ keep_state_idle(#c_state{session = up} = State, Data, Actions) ->
     {next_state, State#c_state{fsm = idle}, Data, Actions};
 keep_state_idle(_State, Data, Actions) ->
     {keep_state, Data, Actions}.
+
+next_state_idle(State, Data) ->
+    next_state_idle(State, Data, []).
+
+next_state_idle(#c_state{session = up} = State, Data, Actions) ->
+    {next_state, State#c_state{fsm = idle}, Data, Actions};
+next_state_idle(State, Data, Actions) ->
+    {next_state, State, Data, Actions}.
 
 %% keep_state_busy(#c_state{session = up} = State, Data) ->
 %%     {next_state, State#c_state{fsm = busy}, Data};
@@ -519,8 +531,13 @@ handle_event(Type, Content, State, #{interface := Interface} = Data) ->
     Interface:handle_event(Type, Content, State, Data).
 
 terminate(Reason, State, #{interface := Interface} = Data) ->
-    Interface:terminate(Reason, State, Data);
-terminate(_Reason, _State, _Data) ->
+    try
+	Interface:terminate(Reason, State, Data)
+    after
+	terminate_cleanup(State, Data)
+    end;
+terminate(_Reason, State, Data) ->
+    terminate_cleanup(State, Data),
     ok.
 
 code_change(_OldVsn, State, Data, _Extra) ->
@@ -533,16 +550,17 @@ code_change(_OldVsn, State, Data, _Extra) ->
 log_ctx_error(#ctx_err{level = Level, where = {File, Line}, reply = Reply}) ->
     ?LOG(debug, "CtxErr: ~w, at ~s:~w, ~p", [Level, File, Line, Reply]).
 
-handle_ctx_error(#ctx_err{level = Level, context = Context} = CtxErr, _State, Data) ->
+handle_ctx_error(#ctx_err{level = Level, context = Context} = CtxErr,
+		 #c_state{session = State}, Data0) ->
     log_ctx_error(CtxErr),
-    case Level of
-	?FATAL when is_record(Context, context) ->
-	    {stop, normal, Data#{context => Context}};
-	?FATAL ->
+    Data = if is_record(Context, context) ->
+		   Data0#{context => Context};
+	      true ->
+		   Data0
+	   end,
+    if Level =:= ?FATAL orelse State =:= init ->
 	    {stop, normal, Data};
-	_ when is_record(Context, context) ->
-	    {keep_state, Data#{context => Context}};
-	_ ->
+       true ->
 	    {keep_state, Data}
     end.
 
@@ -608,6 +626,11 @@ generic_error(#request{gtp_port = GtpPort} = Request,
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+terminate_cleanup(#c_state{session = State}, Data) when State =/= up ->
+    ergw_context:delete_context_record(Data);
+terminate_cleanup(_State, _) ->
+    ok.
 
 register_request(Handler, Server, #request{key = ReqKey, gtp_port = GtpPort}) ->
     gtp_context_reg:register([port_key(GtpPort, ReqKey)], Handler, Server).

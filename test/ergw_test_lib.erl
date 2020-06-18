@@ -33,7 +33,7 @@
 -export([gtpc_server_init/2]).
 -export([pretty_print/1]).
 -export([set_cfg_value/3, add_cfg_value/3]).
--export([outstanding_requests/0, wait4tunnels/1, hexstr2bin/1]).
+-export([outstanding_requests/0, wait4tunnels/1, active_contexts/0, hexstr2bin/1]).
 -export([match_metric/7, get_metric/4]).
 -export([has_ipv6_test_config/0]).
 -export([query_usage_report/2]).
@@ -568,6 +568,10 @@ wait4tunnels(Cnt) ->
 		    ct:fail("timeout, waiting for tunnels to terminate, left over ~p", [Other])
 	    end
     end.
+
+active_contexts() ->
+    {Cnt, _} = ergw_nudsf:search(#{tag => type, value => 'gtp-c'}, #{count => true}),
+    Cnt.
 
 %%%===================================================================
 %% hexstr2bin from otp/lib/crypto/test/crypto_SUITE.erl

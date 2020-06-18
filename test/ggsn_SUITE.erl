@@ -424,6 +424,7 @@ common() ->
      path_restart, path_restart_recovery, path_restart_multi,
      path_failure,
      simple_pdp_context_request,
+     long_pdp_context_request,
      duplicate_pdp_context_request,
      error_indication,
      pdp_context_request_bearer_types,
@@ -993,7 +994,49 @@ simple_pdp_context_request(Config) ->
     ?match({_, {<<_:64, 1:64>>, _}}, GtpC#gtpc.ue_ip),
 
     ?equal([], outstanding_requests()),
+
     ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
+
+    socket_counter_metrics_ok(MetricsBefore, MetricsAfter, create_pdp_context_request),
+    socket_counter_metrics_ok(MetricsBefore, MetricsAfter, request_accepted), % In response
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65534),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 0),
+
+    meck_validate(Config),
+    ok.
+
+%%--------------------------------------------------------------------
+long_pdp_context_request() ->
+    [{doc, "Check simple Create PDP Context, long delay, Delete PDP Context sequence"}].
+long_pdp_context_request(Config) ->
+    PoolId = [<<"pool-A">>, ipv4, "10.180.0.1"],
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65534),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 0),
+
+    MetricsBefore = socket_counter_metrics(),
+    {GtpC, _, _} = create_pdp_context(Config),
+    MetricsAfter = socket_counter_metrics(),
+
+    ?equal([], outstanding_requests()),
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65533),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 1),
+
+    ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
+    ?equal(1, active_contexts()),
+    meck:reset(?HUT),
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65533),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 1),
+
+    delete_pdp_context(GtpC),
+
+    ?match({_, {<<_:64, 1:64>>, _}}, GtpC#gtpc.ue_ip),
+
+    ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
+    ?equal(0, active_contexts()),
 
     socket_counter_metrics_ok(MetricsBefore, MetricsAfter, create_pdp_context_request),
     socket_counter_metrics_ok(MetricsBefore, MetricsAfter, request_accepted), % In response

@@ -222,6 +222,8 @@ delete_key(Key, Pid) ->
     case ets:lookup(?SERVER, Key) of
 	[{Key, {_, Pid}}] ->
 	    ets:take(?SERVER, Key);
+	[{Key, Pid}] ->
+	    ets:take(?SERVER, Key);
 	Other ->
 	    Other
     end.
