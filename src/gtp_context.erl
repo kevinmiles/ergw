@@ -368,7 +368,8 @@ init([RecordId]) ->
     case gtp_context_reg:register_name(RecordId, self()) of
 	yes ->
 	    case ergw_context:get_context_record(RecordId) of
-		{ok, State, Data} ->
+		{ok, State, Data0} ->
+		    Data = restore_session_state(Data0),
 		    {ok, #c_state{session = State, fsm = init}, Data};
 		Other ->
 		    {stop, Other}
@@ -448,7 +449,8 @@ handle_event({call, From}, {?TestCmdTag, pcc_rules}, _State, #{pcc := PCC}) ->
 
 handle_event(state_timeout, idle, #c_state{fsm = init}, Data) ->
     {stop, normal, Data};
-handle_event(state_timeout, idle, #c_state{session = SState, fsm = idle}, Data) ->
+handle_event(state_timeout, idle, #c_state{session = SState, fsm = idle}, Data0) ->
+    Data = save_session_state(Data0),
     ergw_context:put_context_record(SState, Data),
     ct:pal("Nudsf all: ~p", [ergw_nudsf:all()]),
     {stop, normal, Data};
@@ -798,6 +800,19 @@ port_teid_key(#gtp_port{type = Type} = Port, TEI) ->
 
 port_teid_key(#gtp_port{name = Name}, Type, TEI) ->
     {Name, {teid, Type, TEI}}.
+
+save_session_state(#{'Session' := Session} = Data)
+  when is_pid(Session) ->
+    Data#{'Session' => ergw_aaa_session:save(Session)};
+save_session_state(Data) ->
+    Data.
+
+restore_session_state(#{'Session' := Session} = Data)
+  when not is_pid(Session) ->
+    {ok, SessionPid} = ergw_aaa_session_sup:new_session(self(), Session),
+    Data#{'Session' => SessionPid};
+restore_session_state(Data) ->
+    Data.
 
 %%====================================================================
 %% Experimental Trigger Support
