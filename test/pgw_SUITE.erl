@@ -597,6 +597,7 @@ common() ->
      path_failure,
      path_maintenance,
      simple_session_request,
+     long_session_request,
      duplicate_session_request,
      duplicate_session_slow,
      error_indication,
@@ -1441,6 +1442,37 @@ simple_session_request(Config) ->
 		}
 	  }
        ], URR),
+
+    meck_validate(Config),
+    ok.
+
+%%--------------------------------------------------------------------
+long_session_request() ->
+    [{doc, "Check simple Create Session, long delay, Delete Session sequence"}].
+long_session_request(Config) ->
+    PoolId = [<<"pool-A">>, ipv4, "10.180.0.1"],
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65534),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 0),
+
+    {GtpC, _, _} = create_session(ipv4, Config),
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65533),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 1),
+
+    ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
+    ?equal(1, active_contexts()),
+    meck:reset(?HUT),
+
+    delete_session(GtpC),
+
+    ?equal([], outstanding_requests()),
+
+    ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
+    ?equal(0, active_contexts()),
+
+    ?match_metric(prometheus_gauge, ergw_ip_pool_free, PoolId, 65534),
+    ?match_metric(prometheus_gauge, ergw_ip_pool_used, PoolId, 0),
 
     meck_validate(Config),
     ok.
