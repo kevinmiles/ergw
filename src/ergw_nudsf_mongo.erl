@@ -24,6 +24,7 @@
 	 delete/2, delete/3,
 	 all/0,
 	 validate_options/1]).
+-export([wipe/0]).
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -272,6 +273,20 @@ all() ->
 	    ?LOG(debug, "all(..) -> ~p", [_Other]),
 	    ?LOG(error, "MongoDB.find() failed with ~p", [_Other]),
 	    {error, not_found}
+    end.
+
+wipe() ->
+    ?LOG(debug, "wipe()"),
+    Selector = #{},
+    ?LOG(debug, "wipe(..): ~p", [Selector]),
+    case mongo_api:delete(?SERVER, <<"Nudfs">>, Selector) of
+	{true, Result} ->
+	    ?LOG(debug, "wipe(..) -> ~p", [Result]),
+	    ok;
+	_Other ->
+	    ?LOG(debug, "wipe(..) -> ~p", [_Other]),
+	    ?LOG(error, "MongoDB.delete() failed with ~p", [_Other]),
+	    {error, failed}
     end.
 
 %%%===================================================================

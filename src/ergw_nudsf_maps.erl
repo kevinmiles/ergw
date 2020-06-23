@@ -9,7 +9,7 @@
 %% - functional API according to TS
 %% - not optimized for anything
 
--module(ergw_nudsf_ets).
+-module(ergw_nudsf_maps).
 
 -behavior(gen_server).
 -behavior(ergw_nudsf_api).
@@ -34,7 +34,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
--record(entry, {key, meta, blocks}).
+-record(entry, {meta, blocks}).
 
 %%%=========================================================================
 %%%  API
@@ -124,52 +124,48 @@ start_link() ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    ets:new(?SERVER, [ordered_set, named_table, public, {keypos, #entry.key}]),
     {ok, #{}}.
 
-handle_call({get, record, RecordId}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{meta = Meta, blocks = Blocks}] ->
-		{ok, Meta, Blocks};
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({get, record, RecordId}, _Form, State)
+  when is_map_key(RecordId, State) ->
+    Entry = maps:get(RecordId, State),
+    Reply = {ok, Entry#entry.meta, Entry#entry.blocks},
     {reply, Reply, State};
 
-handle_call({get, meta, RecordId}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{meta = Meta}] ->
-		{ok, Meta};
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({get, meta, RecordId}, _Form, State)
+  when is_map_key(RecordId, State) ->
+    Entry = maps:get(RecordId, State),
+    Reply = {ok, Entry#entry.meta},
     {reply, Reply, State};
 
-handle_call({get, blocks, RecordId}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{blocks = Blocks}] ->
-		{ok, Blocks};
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({get, blocks, RecordId}, _Form, State)
+  when is_map_key(RecordId, State) ->
+    Entry = maps:get(RecordId, State),
+    Reply = {ok, Entry#entry.blocks},
     {reply, Reply, State};
 
-handle_call({get, block, RecordId, BlockId}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{blocks = #{BlockId := Block}}] ->
-		{ok, Block};
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({get, blocks, _}, _Form, State) ->
+    Reply = {error, not_found},
+    {reply, Reply, State};
+
+handle_call({get, block, RecordId, BlockId}, _Form, State)
+  when is_map_key(RecordId, State) ->
+    Entry = maps:get(RecordId, State),
+    Reply = case Entry#entry.blocks of
+		#{BlockId := Block} ->
+		    {ok, Block};
+		_ ->
+		    {error, not_found}
+	    end,
+    {reply, Reply, State};
+
+handle_call({get, block, _, _}, _Form, State) ->
+    Reply = {error, not_found},
     {reply, Reply, State};
 
 handle_call({search, Filter, Opts}, _Form, State) ->
     try
-	ResM = ets:foldl(search(_, Filter, _), [], ?SERVER),
+	ResM = maps:filter(search(_, _, Filter), State),
 	Reply = search_reply(ResM, Opts),
 	{reply, Reply, State}
     catch
@@ -179,90 +175,96 @@ handle_call({search, Filter, Opts}, _Form, State) ->
 	    {reply, {error, invalid_filter}, State}
     end;
 
-handle_call({create, record, RecordId, Meta, Blocks}, _Form, State) ->
-    Entry = #entry{key = RecordId, meta = Meta, blocks = Blocks},
-    Reply =
-	case ets:insert_new(?SERVER, Entry) of
-	    true ->
-		ok;
-	    false ->
-		{error, already_exists}
-	end,
+handle_call({create, record, RecordId, _, _, _}, _Form, State)
+  when is_map_key(RecordId, State) ->
+    Reply = {error, already_exists},
     {reply, Reply, State};
 
-handle_call({create, block, RecordId, BlockId, Block}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{blocks = #{BlockId := _}}] ->
-		{error, already_exists};
-	    [#entry{blocks = Blocks}] ->
-		Update = {#entry.blocks, Blocks#{BlockId => Block}},
-		ets:update_element(?SERVER, RecordId, Update),
-		ok;
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({create, record, RecordId, Meta, Blocks}, _Form, State0) ->
+    Entry = #entry{meta = Meta, blocks = Blocks},
+    State = maps:put(RecordId, Entry, State0),
+    {reply, ok, State};
+
+handle_call({create, block, RecordId, _, _, _}, _Form, State)
+  when is_map_key(RecordId, State) ->
+    Reply = {error, already_exists},
     {reply, Reply, State};
 
-handle_call({put, record, RecordId, Meta, Blocks}, _Form, State) ->
-    Update = [{#entry.meta, Meta}, {#entry.blocks, Blocks}],
-    Reply =
-	case ets:update_element(?SERVER, RecordId, Update) of
-	    true -> ok;
-	    false -> {error, not_found}
-	end,
+handle_call({create, block, RecordId, BlockId, Block}, _Form, State0)
+  when is_map_key(RecordId, State0) ->
+    Entry0 = maps:get(RecordId, State0),
+    Entry = Entry0#entry{blocks = maps:put(BlockId, Block, Entry0#entry.blocks)},
+    State = maps:put(RecordId, Entry, State0),
+    {reply, ok, State};
+
+handle_call({create, block, _, _, _}, _Form, State) ->
+    Reply = {error, not_found},
     {reply, Reply, State};
 
-handle_call({put, meta, RecordId, Meta}, _Form, State) ->
-    Update = [{#entry.meta, Meta}],
-    Reply =
-	case ets:update_element(?SERVER, RecordId, Update) of
-	    true -> ok;
-	    false -> {error, not_found}
-	end,
+handle_call({put, record, RecordId, Meta, Blocks}, _Form, State0)
+  when is_map_key(RecordId, State0) ->
+    Entry = maps:get(RecordId, State0),
+    State = maps:put(RecordId, Entry#entry{meta = Meta, blocks = Blocks}, State0),
+    {reply, ok, State};
+
+handle_call({put, meta, RecordId, Meta}, _Form, State0)
+  when is_map_key(RecordId, State0) ->
+    Entry = maps:get(RecordId, State0),
+    State = maps:put(RecordId, Entry#entry{meta = Meta}, State0),
+    {reply, ok, State};
+
+handle_call({put, _, _, _}, _Form, State) ->
+    Reply = {error, not_found},
     {reply, Reply, State};
 
-handle_call({put, block, RecordId, BlockId, Block}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{blocks = #{BlockId := _} = Blocks}] ->
-		Update = {#entry.blocks, Blocks#{BlockId => Block}},
-		ets:update_element(?SERVER, RecordId, Update),
-		ok;
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({put, block, RecordId, BlockId, Block}, _Form, State0)
+  when is_map_key(RecordId, State0) ->
+    Entry0 = maps:get(RecordId, State0),
+    case maps:is_key(BlockId, Entry0#entry.blocks) of
+	true ->
+	    Entry = Entry0#entry{blocks = maps:put(BlockId, Block, Entry0#entry.blocks)},
+	    State = maps:put(RecordId, Entry, State0),
+	    {reply, ok, State};
+	_ ->
+	    Reply = {error, not_found},
+	    {reply, Reply, State0}
+    end;
+
+handle_call({put, block, _, _, _}, _Form, State) ->
+    Reply = {error, not_found},
     {reply, Reply, State};
 
-handle_call({delete, record, RecordId}, _Form, State) ->
-    Reply =
-	case ets:take(?SERVER, RecordId) of
-	    [#entry{}] ->
-		ok;
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({delete, record, RecordId}, _Form, State0)
+  when is_map_key(RecordId, State0) ->
+    State = maps:remove(RecordId, State0),
+    {reply, ok, State};
+
+handle_call({delete, record, _}, _Form, State) ->
+    Reply = {error, not_found},
     {reply, Reply, State};
 
-handle_call({delete, block, RecordId, BlockId}, _Form, State) ->
-    Reply =
-	case ets:lookup(?SERVER, RecordId) of
-	    [#entry{blocks = #{BlockId := _} = Blocks}] ->
-		Update = {#entry.blocks, maps:remove(BlockId, Blocks)},
-		ets:update_element(?SERVER, RecordId, Update),
-		ok;
-	    _ ->
-		{error, not_found}
-	end,
+handle_call({delete, block, RecordId, BlockId}, _Form, State0)
+  when is_map_key(RecordId, State0) ->
+    Entry0 = maps:get(RecordId, State0),
+    case maps:is_key(BlockId, Entry0#entry.blocks) of
+	true ->
+	    Entry = Entry0#entry{blocks = maps:remove(BlockId, Entry0#entry.blocks)},
+	    State = maps:put(RecordId, Entry, State0),
+	    {reply, ok, State};
+	_ ->
+	    Reply = {error, not_found},
+	    {reply, Reply, State0}
+    end;
+
+handle_call({delete, block, _, _}, _Form, State) ->
+    Reply = {error, not_found},
     {reply, Reply, State};
 
 handle_call(all, _From, State) ->
-    Reply = ets:tab2list(?SERVER),
-    {reply, Reply, State};
+    {reply, State, State};
 
 handle_call(wipe, _From, State) ->
-    ets:delete_all_objects(?SERVER),
-    {reply, ok, State};
+    {reply, ok, #{}};
 
 handle_call(Request, _From, State) ->
     Reply = {error, {badarg, Request}},
@@ -285,19 +287,16 @@ code_change(_OldVsn, State, _Extra) ->
 %%%=========================================================================
 
 search_reply(ResM, #{count := true}) ->
-    {length(ResM), []};
+    {maps:size(ResM), []};
 search_reply(ResM, #{range := Range} = Opts) ->
     Page = maps:get(page, Opts, 1),
-    {ResL, _} = lists:split(Range, lists:nthtail((Range - 1) * Page, ResM)),
-    {length(ResM), ResL};
+    {ResL, _} = lists:split(Range, lists:nthtail((Range - 1) * Page, maps:keys(ResM))),
+    {maps:size(ResM), ResL};
 search_reply(ResM, _Opts) ->
-    {length(ResM), ResM}.
+    {maps:size(ResM), maps:keys(ResM)}.
 
-search(#entry{key = Key, meta = Meta}, Expr, Acc) ->
-    case search_expr(Expr, maps:get(tags, Meta, #{})) of
-	true  -> [Key | Acc];
-	false -> Acc
-    end.
+search(_, #entry{meta = Meta}, Expr) ->
+    search_expr(Expr, maps:get(tags, Meta, #{})).
 
 search_expr(#{'cond' := Cond, units := Units}, Tags) ->
     search_expr(Cond, Units, Tags);

@@ -82,6 +82,7 @@
     ok | {error, not_found}.
 
 -callback all() -> #{record_id() => record()}.
+-callback wipe() -> ok.
 
 -callback validate_options(Values :: map() | list()) ->
     map().
