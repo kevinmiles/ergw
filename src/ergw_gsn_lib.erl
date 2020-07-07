@@ -115,11 +115,38 @@ query_usage_report(ChargingKeys, Ctx, PCtx)
 get_rating_group(Key, M) when is_map(M) ->
     hd(maps:get(Key, M, maps:get('Rating-Group', M, [undefined]))).
 
+ctx_update_dp_ids(IEs, Ctx, PCtx) ->
+    Acc0 = {Ctx, PCtx},
+    Acc1 = ctx_update_dp_seid(IEs, Acc0),
+    _Acc = ctx_update_dp_pdrs(IEs, Acc1).
+
 ctx_update_dp_seid(#{f_seid := #f_seid{seid = DP}},
-		   #pfcp_ctx{seid = SEID} = PCtx) ->
-    PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}};
-ctx_update_dp_seid(_, PCtx) ->
-    PCtx.
+		   {Ctx, #pfcp_ctx{seid = SEID} = PCtx}) ->
+    {Ctx, PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}}};
+ctx_update_dp_seid(_, Acc) ->
+    Acc.
+
+ctx_update_dp_pdr(#created_pdr{group = #{pdr_id := #pdr_id{id = Id},
+					 f_teid := #f_teid{teid = TEID,
+							   ipv4 = IP4, ipv6 = IP6} = FqTEID}},
+		  {#context{local_data_endp = LocalDataEndp} = Ctx0, PCtx0})
+  when is_integer(TEID) ->
+    IP = choose_context_ip(IP4, IP6, Ctx0),
+    Ctx = Ctx0#context{local_data_endp =
+			   LocalDataEndp#gtp_endp{
+			     ip = ergw_inet:bin2ip(IP), teid = TEID}},
+    PCtx = ergw_pfcp:update_teids(Id, FqTEID, PCtx0),
+    register_ctx_ids(gtp_context, Ctx, PCtx),
+    {Ctx, PCtx};
+ctx_update_dp_pdr(_, Acc) ->
+    Acc.
+
+ctx_update_dp_pdrs(#{created_pdr := #created_pdr{} = PDR}, Acc) ->
+    ctx_update_dp_pdr(PDR, Acc);
+ctx_update_dp_pdrs(#{created_pdr := PDRs}, Acc) when is_list(PDRs) ->
+    lists:foldl(fun ctx_update_dp_pdr/2, Acc, PDRs);
+ctx_update_dp_pdrs(_, Acc) ->
+    Acc.
 
 %% use additional information from the Context to prefre V4 or V6....
 choose_context_ip(IP4, _IP6, #context{control_port = #gtp_port{ip = LocalIP}})
@@ -150,7 +177,7 @@ session_establishment_request(PCC, PCtx0, Ctx) ->
 	#pfcp{version = v1, type = session_establishment_response,
 	      ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'},
 		     f_seid := #f_seid{}} = RespIEs} ->
-	    {Ctx, ctx_update_dp_seid(RespIEs, PCtx)};
+	    ctx_update_dp_ids(RespIEs, Ctx, PCtx);
 	_ ->
 	    throw(?CTX_ERR(?FATAL, system_failure, Ctx))
     end.
@@ -1066,7 +1093,7 @@ register_ctx_ids(Handler,
     Keys = [{seid, SEID} |
 	    [ergw_pfcp:ctx_teid_key(PCtx, #fq_teid{ip = LocalDataEndp#gtp_endp.ip,
 						   teid = LocalDataEndp#gtp_endp.teid}) ||
-		is_record(LocalDataEndp, gtp_endp)]],
+		is_record(LocalDataEndp, gtp_endp), is_integer(LocalDataEndp#gtp_endp.teid)]],
     gtp_context_reg:register(Keys, Handler, self()).
 
 create_sgi_session(PCtx, NodeCaps, PCC, Ctx0)

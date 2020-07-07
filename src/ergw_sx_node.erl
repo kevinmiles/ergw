@@ -39,6 +39,7 @@
 	       mode = transient  :: 'transient' | 'persistent',
 	       node_select       :: atom(),
 	       retries = 0       :: non_neg_integer(),
+	       features          :: #up_function_features{},
 	       recovery_ts       :: undefined | non_neg_integer(),
 	       pfcp_ctx          :: #pfcp_ctx{},
 	       upf_data_endp     :: #gtp_endp{},
@@ -362,16 +363,18 @@ handle_event(cast, {response, _, #pfcp{version = v1, type = heartbeat_response, 
 
 handle_event(cast, {response, from_cp_rule,
 		    #pfcp{version = v1, type = session_establishment_response,
-			  ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'},
-				 f_seid := #f_seid{seid = DP}}}} = R,
-	     {connected, init}, #data{pfcp_ctx = #pfcp_ctx{seid = SEID} = PCtx} = Data) ->
+			  ie = #{pfcp_cause :=
+				     #pfcp_cause{cause = 'Request accepted'}} = IEs}} = R,
+	     {connected, init}, #data{pfcp_ctx = PCtx0, upf_data_endp = DataEndP0} = Data) ->
     ?LOG(debug, "Response: ~p", [R]),
-    {next_state, {connected, ready}, Data#data{pfcp_ctx = PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}}}};
+    {DataEndP, PCtx} = ctx_update_dp_ids(IEs, DataEndP0, PCtx0),
+    {next_state, {connected, ready}, Data#data{pfcp_ctx = PCtx, upf_data_endp = DataEndP}};
 
 handle_event({call, From}, attach, _, #data{pfcp_ctx = PNodeCtx} = Data) ->
     PCtx = #pfcp_ctx{
 	      name = PNodeCtx#pfcp_ctx.name,
 	      node = PNodeCtx#pfcp_ctx.node,
+	      features = PNodeCtx#pfcp_ctx.features,
 	      seid = #seid{cp = ergw_sx_socket:seid()},
 
 	      cp_port = PNodeCtx#pfcp_ctx.cp_port,
@@ -694,20 +697,25 @@ heartbeat_response(ReqKey, #pfcp{type = heartbeat_request} = Request) ->
     ergw_sx_socket:send_response(ReqKey, Response, true).
 
 handle_nodeup(#{recovery_time_stamp := #recovery_time_stamp{time = RecoveryTS}} = IEs,
-	      #data{dp = #node{node = Node, ip = IP},
+	      #data{pfcp_ctx = PNodeCtx,
+		    dp = #node{node = Node, ip = IP},
 		    vrfs = VRFs} = Data0) ->
     ?LOG(debug, "Node ~s (~s) is up", [Node, inet:ntoa(IP)]),
     ?LOG(debug, "Node IEs: ~s", [pfcp_packet:pretty_print(IEs)]),
 
+    UPFeatures = maps:get(up_function_features, IEs, #up_function_features{_ = 0}),
     UPIPResInfo = maps:get(user_plane_ip_resource_information, IEs, []),
     Data = Data0#data{
+	     pfcp_ctx = PNodeCtx#pfcp_ctx{features = UPFeatures},
 	     recovery_ts = RecoveryTS,
+	     features = UPFeatures,
 	     vrfs = init_vrfs(VRFs, UPIPResInfo)
 	    },
     install_cp_rules(Data).
 
 init_node_cfg(#data{cfg = Cfg} = Data) ->
     Data#data{
+      features = #up_function_features{_ = 0},
       ip_pools = maps:get(ip_pools, Cfg, []),
       vrfs = maps:map(
 	       fun(Id, #{features := Features}) ->
@@ -765,11 +773,42 @@ create_data_endp(PCtx, Node, VRFs) ->
 	lists:filter(fun(#vrf{features = Features}) ->
 			     lists:member('CP-Function', Features)
 		     end, maps:values(VRFs)),
-    {ok, DataTEI} = gtp_context_reg:alloc_tei(PCtx),
-    #gtp_endp{
-       vrf = VRF#vrf.name,
-       ip = choose_up_ip(Node, VRF),
-       teid = DataTEI}.
+    IP = choose_up_ip(Node, VRF),
+    ergw_pfcp:make_data_endp(VRF#vrf.name, IP, PCtx).
+
+ctx_update_dp_ids(IEs, DataEndP, PCtx) ->
+    Acc0 = {DataEndP, PCtx},
+    Acc1 = ctx_update_dp_seid(IEs, Acc0),
+    _Acc = ctx_update_dp_pdrs(IEs, Acc1).
+
+ctx_update_dp_seid(#{f_seid := #f_seid{seid = DP}},
+		   {DataEndP, #pfcp_ctx{seid = SEID} = PCtx}) ->
+    {DataEndP, PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}}};
+ctx_update_dp_seid(_, Acc) ->
+    Acc.
+
+ctx_update_dp_pdr(#created_pdr{group = #{pdr_id := #pdr_id{id = Id},
+					 f_teid := #f_teid{teid = TEID,
+							   ipv4 = IP4, ipv6 = IP6} = FqTEID}},
+		  {DataEndP0, PCtx0})
+  when is_integer(TEID) ->
+    IP = case DataEndP0 of
+	     #gtp_endp{ip = v4} when is_binary(IP4) -> IP4;
+	     #gtp_endp{ip = v6} when is_binary(IP6) -> IP6;
+	     #gtp_endp{ip = DpIP} when DpIP =:= IP4 orelse DpIP =:= IP6 -> DpIP
+	 end,
+    DataEndP = DataEndP0#gtp_endp{ip = ergw_inet:bin2ip(IP), teid = TEID},
+    PCtx = ergw_pfcp:update_teids(Id, FqTEID, PCtx0),
+    {DataEndP, PCtx};
+ctx_update_dp_pdr(_, Acc) ->
+    Acc.
+
+ctx_update_dp_pdrs(#{created_pdr := #created_pdr{} = PDR}, Acc) ->
+    ctx_update_dp_pdr(PDR, Acc);
+ctx_update_dp_pdrs(#{created_pdr := PDRs}, Acc) when is_list(PDRs) ->
+    lists:foldl(fun ctx_update_dp_pdr/2, Acc, PDRs);
+ctx_update_dp_pdrs(_, Acc) ->
+    Acc.
 
 gen_pfcp_rules(_Key, #vrf{features = Features} = VRF, DataEndP, Acc) ->
     lists:foldl(gen_per_feature_pfcp_rule(_, VRF, DataEndP, _), Acc, Features).

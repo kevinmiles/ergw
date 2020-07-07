@@ -52,6 +52,7 @@
 -record(pfcp_ctx, {
 	  name			:: term(),
 	  node			:: pid(),
+	  features,
 	  seid			:: #seid{},
 
 	  cp_port		:: #gtp_port{},

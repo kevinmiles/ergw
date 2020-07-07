@@ -17,10 +17,11 @@
 	 outer_header_creation/1,
 	 outer_header_removal/1,
 	 ctx_teid_key/2,
-	 assign_data_teid/3,
+	 make_data_endp/3, assign_data_teid/3,
 	 up_inactivity_timer/1]).
 -export([init_ctx/1, reset_ctx/1,
-	 get_id/2, get_id/3, update_pfcp_rules/3]).
+	 get_id/2, get_id/3, update_pfcp_rules/3,
+	 update_teids/3]).
 -export([get_urr_id/4, get_urr_group/2,
 	 get_urr_ids/1, get_urr_ids/2,
 	 find_urr_by_id/2]).
@@ -77,10 +78,19 @@ f_seid(#pfcp_ctx{seid = #seid{cp = SEID}}, #node{ip = {_,_,_,_,_,_,_,_} = IP}) -
 f_teid(#gtp_endp{ip = IP, teid = TEID}) ->
     f_teid(TEID, IP).
 
+f_teid_id(TEID, Fq) when is_integer(TEID) ->
+    Fq#f_teid{teid = TEID};
+f_teid_id({upf, ChId}, Fq) ->
+    Fq#f_teid{teid = choose, choose_id = ChId}.
+
 f_teid(TEID, {_,_,_,_} = IP) ->
-    #f_teid{teid = TEID, ipv4 = ergw_inet:ip2bin(IP)};
+    f_teid_id(TEID, #f_teid{ipv4 = ergw_inet:ip2bin(IP)});
 f_teid(TEID, {_,_,_,_,_,_,_,_} = IP) ->
-    #f_teid{teid = TEID, ipv6 = ergw_inet:ip2bin(IP)}.
+    f_teid_id(TEID, #f_teid{ipv6 = ergw_inet:ip2bin(IP)});
+f_teid(TEID, v4) ->
+    f_teid_id(TEID, #f_teid{ipv4 = choose});
+f_teid(TEID, v6) ->
+    f_teid_id(TEID, #f_teid{ipv6 = choose}).
 
 outer_header_creation(#fq_teid{ip = {_,_,_,_} = IP, teid = TEID}) ->
     #outer_header_creation{type = 'GTP-U', teid = TEID, ipv4 = ergw_inet:ip2bin(IP)};
@@ -89,6 +99,10 @@ outer_header_creation(#fq_teid{ip = {_,_,_,_,_,_,_,_} = IP, teid = TEID}) ->
 
 outer_header_removal(#gtp_endp{ip = IP}) ->
     outer_header_removal(IP);
+outer_header_removal(v4) ->
+    #outer_header_removal{header = 'GTP-U/UDP/IPv4'};
+outer_header_removal(v6) ->
+    #outer_header_removal{header = 'GTP-U/UDP/IPv6'};
 outer_header_removal({_,_,_,_}) ->
     #outer_header_removal{header = 'GTP-U/UDP/IPv4'};
 outer_header_removal({_,_,_,_,_,_,_,_}) ->
@@ -101,16 +115,24 @@ get_port_vrf(#gtp_port{vrf = VRF}, VRFs)
 ctx_teid_key(#pfcp_ctx{name = Name}, TEI) ->
     {Name, {teid, 'gtp-u', TEI}}.
 
+make_data_endp(Name, IP, #pfcp_ctx{features = #up_function_features{ftup = 1}}) ->
+    %% TBD: NSAPI/EBI bearer id in choose...
+    IPver = if is_binary(IP) andalso byte_size(IP) =:=  4 -> v4;
+	       is_tuple(IP)  andalso size(IP)      =:=  4 -> v4;
+	       is_tuple(IP)  andalso size(IP)      =:=  8 -> v6;
+	       is_binary(IP) andalso byte_size(IP) =:= 16 -> v6
+	    end,
+    #gtp_endp{vrf = Name, ip = IPver, teid = {upf, 5}};
+make_data_endp(Name, IP, PCtx) ->
+    {ok, DataTEI} = gtp_context_reg:alloc_tei(PCtx),
+    #gtp_endp{vrf = Name, ip = ergw_inet:to_ip(IP), teid = DataTEI}.
+
 assign_data_teid(PCtx, {VRFs, _} = _NodeCaps,
 		 #context{control_port = ControlPort} = Context) ->
-    #vrf{name = Name, ipv4 = IP4, ipv6 = IP6} =
-	get_port_vrf(ControlPort, VRFs),
-
+    #vrf{name = Name, ipv4 = IP4, ipv6 = IP6} =	get_port_vrf(ControlPort, VRFs),
     IP = ergw_gsn_lib:choose_context_ip(IP4, IP6, Context),
-    {ok, DataTEI} = gtp_context_reg:alloc_tei(PCtx),
-    Context#context{
-      local_data_endp = #gtp_endp{vrf = Name, ip = ergw_inet:bin2ip(IP), teid = DataTEI}
-     }.
+    DataEndP = make_data_endp(Name, IP, PCtx),
+    Context#context{local_data_endp = DataEndP}.
 
 up_inactivity_timer(#pfcp_ctx{up_inactivity_timer = Timer})
   when is_integer(Timer) ->
@@ -248,6 +270,19 @@ timer_expired(TRef, #pfcp_ctx{timers = Ts, timer_by_tref = Ids} = PCtx0) ->
 	_ ->
 	    {[], PCtx0}
     end.
+
+%%%===================================================================
+%%% Update UPF assigned TEIDs in rules
+%%%===================================================================
+
+update_teids(_Id, FqTEID, {pdr, _}, #{pdi := #pdi{group = PDI}} = Rules)
+  when is_map_key(f_teid, PDI) ->
+    maps:put(pdi, #pdi{group = maps:put(f_teid, FqTEID, PDI)}, Rules);
+update_teids(_Id, _FqTEID, _K, V) ->
+    V.
+
+update_teids(Id, FqTEID, #pfcp_ctx{sx_rules = Rules} = PCtx) ->
+    PCtx#pfcp_ctx{sx_rules = maps:map(update_teids(Id, FqTEID, _, _), Rules)}.
 
 %%%===================================================================
 %%% Translate PFCP state into Create/Modify/Delete rules
