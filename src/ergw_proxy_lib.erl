@@ -181,11 +181,51 @@ validate_context(Name, Opts, _Acc) ->
 %%% Helper functions
 %%%===================================================================
 
+fold_ies(Fun, Acc, IE) when is_tuple(IE) ->
+    Fun(IE, Acc);
+fold_ies(Fun, Acc, IEs) when is_list(IEs) ->
+    lists:foldl(Fun, Acc, IEs);
+fold_ies(_, Acc, _) ->
+    Acc.
+
+ctx_update_dp_ids(IEs, PCtx0) ->
+    PCtx1 = ctx_update_dp_seid(IEs, PCtx0),
+    _PCtx = ctx_update_dp_pdrs(IEs, PCtx1).
+
 ctx_update_dp_seid(#{f_seid := #f_seid{seid = DP}},
 		   #pfcp_ctx{seid = SEID} = PCtx) ->
     PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}};
 ctx_update_dp_seid(_, PCtx) ->
     PCtx.
+
+ctx_update_dp_pdr(#created_pdr{group = #{pdr_id := #pdr_id{id = Id},
+					 f_teid := #f_teid{teid = TEID} = FqTEID}},
+		  PCtx)
+  when is_integer(TEID) ->
+    ergw_pfcp:update_teids(Id, FqTEID, PCtx);
+ctx_update_dp_pdr(_, PCtx) ->
+    PCtx.
+
+ctx_update_dp_pdrs(IEs, PCtx) ->
+    CreatedPDRs = maps:get(created_pdr, IEs, undefined),
+    fold_ies(fun ctx_update_dp_pdr/2, PCtx, CreatedPDRs).
+
+ctx_update_ctx_teid(#created_pdr{
+		       group = #{f_teid := #f_teid{teid = TEID, ipv4 = IP4, ipv6 = IP6}}},
+		    PCtx, #context{local_data_endp = LocalDataEndp} = Ctx0)
+  when is_integer(TEID) ->
+    IP = ergw_gsn_lib:choose_context_ip(IP4, IP6, Ctx0),
+    Ctx = Ctx0#context{local_data_endp =
+			   LocalDataEndp#gtp_endp{
+		     ip = ergw_inet:bin2ip(IP), teid = TEID}},
+    register_ctx_ids(Ctx, PCtx),
+    Ctx;
+ctx_update_ctx_teid(_, _, Ctx) ->
+    Ctx.
+
+ctx_update_ctx_teids(CreatedPDRs, PCtx, Ctx) ->
+    fold_ies(ctx_update_ctx_teid(_, PCtx, _), Ctx, CreatedPDRs).
+
 
 make_request_id(#request{key = ReqKey}, #gtp{seq_no = SeqNo})
   when is_integer(SeqNo) ->
@@ -270,33 +310,37 @@ register_ctx_ids(#context{local_data_endp = LocalDataEndp},
     Keys = [{seid, SEID} |
 	    [ergw_pfcp:ctx_teid_key(PCtx, #fq_teid{ip = LocalDataEndp#gtp_endp.ip,
 						   teid = LocalDataEndp#gtp_endp.teid}) ||
-		is_record(LocalDataEndp, gtp_endp)]],
+		is_record(LocalDataEndp, gtp_endp), is_integer(LocalDataEndp#gtp_endp.teid)]],
     gtp_context_reg:register(Keys, gtp_context, self()).
 
 create_forward_session(Candidates, Left0, Right0) ->
     {ok, PCtx0, NodeCaps} = ergw_sx_node:select_sx_node(Candidates, Left0),
-    Left = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Left0),
-    register_ctx_ids(Left, PCtx0),
-    Right = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Right0),
-    register_ctx_ids(Left, PCtx0),
+    Left1 = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Left0),
+    register_ctx_ids(Left1, PCtx0),
+    Right1 = ergw_pfcp:assign_data_teid(PCtx0, NodeCaps, Right0),
+    register_ctx_ids(Right1, PCtx0),
 
     {ok, CntlNode, _} = ergw_sx_socket:id(),
 
-    MakeRules = [{'Access', Left, 'Core', Right}, {'Core', Right, 'Access', Left}],
+    MakeRules = [{'Access', Left1, 'Core', Right1}, {'Core', Right1, 'Access', Left1}],
     PCtx1 = lists:foldl(fun proxy_pdr/2, PCtx0, MakeRules),
     PCtx2 = lists:foldl(fun proxy_far/2, PCtx1, MakeRules),
-    PCtx = proxy_urr(PCtx2),
-    Rules = ergw_pfcp:update_pfcp_rules(PCtx0, PCtx, #{}),
-    IEs = update_m_rec(ergw_pfcp:f_seid(PCtx, CntlNode), Rules),
+    PCtx3 = proxy_urr(PCtx2),
+    Rules = ergw_pfcp:update_pfcp_rules(PCtx0, PCtx3, #{}),
+    IEs = update_m_rec(ergw_pfcp:f_seid(PCtx3, CntlNode), Rules),
 
     Req = #pfcp{version = v1, type = session_establishment_request, ie = IEs},
-    case ergw_sx_node:call(PCtx, Req, Left) of
+    case ergw_sx_node:call(PCtx3, Req, Left1) of
 	#pfcp{version = v1, type = session_establishment_response,
 	      ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'},
 		     f_seid := #f_seid{}} = RespIEs} ->
-	    {Left, Right, ctx_update_dp_seid(RespIEs, PCtx)};
+	    CreatedPDR = maps:get(created_pdr, RespIEs, undefined),
+	    PCtx = ctx_update_dp_ids(RespIEs, PCtx3),
+	    Left = ctx_update_ctx_teids(CreatedPDR, PCtx, Left1),
+	    Right = ctx_update_ctx_teids(CreatedPDR, PCtx, Right1),
+	    {Left, Right, PCtx};
 	_Other ->
-	    throw(?CTX_ERR(?FATAL, system_failure, Left))
+	    throw(?CTX_ERR(?FATAL, system_failure, Left1))
     end.
 
 modify_forward_session(#context{version = OldVersion} = OldLeft,
