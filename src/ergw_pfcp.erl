@@ -17,10 +17,12 @@
 	 outer_header_creation/1,
 	 outer_header_removal/1,
 	 ctx_teid_key/2,
-	 make_data_endp/3, assign_data_teid/3,
+	 make_data_endp/3, make_data_endp/4,
+	 assign_data_teid/3,
 	 up_inactivity_timer/1]).
 -export([init_ctx/1, reset_ctx/1,
-	 get_id/2, get_id/3, update_pfcp_rules/3,
+	 get_id/2, get_id/3, get_id_name/3,
+	 update_pfcp_rules/3,
 	 update_teids/3]).
 -export([get_urr_id/4, get_urr_group/2,
 	 get_urr_ids/1, get_urr_ids/2,
@@ -115,15 +117,21 @@ get_port_vrf(#gtp_port{vrf = VRF}, VRFs)
 ctx_teid_key(#pfcp_ctx{name = Name}, TEI) ->
     {Name, {teid, 'gtp-u', TEI}}.
 
-make_data_endp(Name, IP, #pfcp_ctx{features = #up_function_features{ftup = 1}}) ->
+make_data_endp(Name, IP, PCtx) ->
+    make_data_endp(Name, {upf, 5}, IP, PCtx).
+
+%% for TEID restoration, not used at the moment
+%% make_data_endp(Name, TEID, IP, _PCtx) when is_integer(TEID) ->
+%%     #gtp_endp{vrf = Name, ip = ergw_inet:to_ip(IP), teid = TEI};
+make_data_endp(Name, ChId, IP, #pfcp_ctx{features = #up_function_features{ftup = 1}}) ->
     %% TBD: NSAPI/EBI bearer id in choose...
     IPver = if is_binary(IP) andalso byte_size(IP) =:=  4 -> v4;
 	       is_tuple(IP)  andalso size(IP)      =:=  4 -> v4;
 	       is_tuple(IP)  andalso size(IP)      =:=  8 -> v6;
 	       is_binary(IP) andalso byte_size(IP) =:= 16 -> v6
 	    end,
-    #gtp_endp{vrf = Name, ip = IPver, teid = {upf, 5}};
-make_data_endp(Name, IP, PCtx) ->
+    #gtp_endp{vrf = Name, ip = IPver, teid = ChId};
+make_data_endp(Name, _, IP, PCtx) ->
     {ok, DataTEI} = gtp_context_reg:alloc_tei(PCtx),
     #gtp_endp{vrf = Name, ip = ergw_inet:to_ip(IP), teid = DataTEI}.
 
@@ -182,7 +190,8 @@ pfcp_rule_diff(K, Old, New, Diff) ->
 %%%===================================================================
 
 init_ctx(PCtx) ->
-    PCtx#pfcp_ctx{idcnt = #{}, idmap = #{}, urr_by_id = #{}, urr_by_grp = #{},
+    PCtx#pfcp_ctx{idcnt = #{}, idmap = #{},
+		  urr_by_id = #{}, urr_by_grp = #{},
 		  sx_rules = #{}, timers = #{}, timer_by_tref = #{}}.
 
 reset_ctx(PCtx) ->
@@ -194,16 +203,29 @@ reset_ctx_timers(PCtx) ->
 get_id(Keys, PCtx) ->
     lists:mapfoldr(fun({Type, Name}, P) -> get_id(Type, Name, P) end, PCtx, Keys).
 
-get_id(Type, Name, #pfcp_ctx{idcnt = Cnt, idmap = IdMap} = PCtx) ->
+get_id(Type, Name, #pfcp_ctx{idcnt = Cnt, idmap = IdMap} = PCtx0) ->
     Key = {Type, Name},
     case IdMap of
 	#{Key := Id} ->
-	    {Id, PCtx};
+	    {Id, PCtx0};
 	_ ->
 	    Id = maps:get(Type, Cnt, 1),
-	    {Id, PCtx#pfcp_ctx{idcnt = Cnt#{Type => Id + 1},
-			       idmap = IdMap#{Key => Id}}}
+	    PCtx = PCtx0#pfcp_ctx{
+		     idcnt = maps:put(Type, Id + 1, Cnt),
+		     idmap = maps:put(Key, Id, IdMap)
+		    },
+	    {Id, PCtx}
     end.
+
+get_id_name_i(_Type, _Id, none) ->
+    undefined;
+get_id_name_i(Type, Id, {{Type, Name}, Id, _Iter}) ->
+    Name;
+get_id_name_i(Type, Id, {_, _, Iter}) ->
+    get_id_name_i(Type, Id, maps:next(Iter)).
+
+get_id_name(Type, Id, #pfcp_ctx{idmap = IdMap}) ->
+    get_id_name_i(Type, Id, maps:next(maps:iterator(IdMap))).
 
 get_urr_id(Key, Groups, Info, #pfcp_ctx{urr_by_id = M, urr_by_grp = Grp0} = PCtx0) ->
     {Id, PCtx1} = ergw_pfcp:get_id(urr, Key, PCtx0),

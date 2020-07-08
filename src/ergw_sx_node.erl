@@ -42,7 +42,7 @@
 	       features          :: #up_function_features{},
 	       recovery_ts       :: undefined | non_neg_integer(),
 	       pfcp_ctx          :: #pfcp_ctx{},
-	       upf_data_endp     :: #gtp_endp{},
+	       upf_data_endp     :: #{term() => #gtp_endp{}},
 	       cp,
 	       dp,
 	       ip_pools,
@@ -300,15 +300,19 @@ handle_event(cast, {response, _, #pfcp{version = v1, type = association_setup_re
 	    {next_state, dead, Data0}
     end;
 
-handle_event(cast, {send, 'Access', _VRF, Data}, {connected, _},
+handle_event(cast, {send, 'Access', VRF, Data}, {connected, _},
 	     #data{pfcp_ctx = #pfcp_ctx{cp_port = Port},
 		   dp = #node{ip = IP},
-		   upf_data_endp = #gtp_endp{teid = TEI}}) ->
-
+		   upf_data_endp = DataEndPs})
+  when is_map_key(VRF, DataEndPs) ->
+    #gtp_endp{teid = TEI} = maps:get(VRF, DataEndPs),
     Msg = #gtp{version = v1, type = g_pdu, tei = TEI, ie = Data},
     Bin = gtp_packet:encode(Msg),
     ergw_gtp_u_socket:send(Port, IP, ?GTP1u_PORT, Bin),
+    keep_state_and_data;
 
+handle_event(cast, {send, 'Access', VRF, _Data}, {connected, _}, _) ->
+    ?LOG(error, "Sx send request for unknown VRF '~p'", [VRF]),
     keep_state_and_data;
 
 %%
@@ -365,10 +369,10 @@ handle_event(cast, {response, from_cp_rule,
 		    #pfcp{version = v1, type = session_establishment_response,
 			  ie = #{pfcp_cause :=
 				     #pfcp_cause{cause = 'Request accepted'}} = IEs}} = R,
-	     {connected, init}, #data{pfcp_ctx = PCtx0, upf_data_endp = DataEndP0} = Data) ->
+	     {connected, init}, Data0) ->
     ?LOG(debug, "Response: ~p", [R]),
-    {DataEndP, PCtx} = ctx_update_dp_ids(IEs, DataEndP0, PCtx0),
-    {next_state, {connected, ready}, Data#data{pfcp_ctx = PCtx, upf_data_endp = DataEndP}};
+    Data = ctx_update_dp_ids(IEs, Data0),
+    {next_state, {connected, ready}, Data};
 
 handle_event({call, From}, attach, _, #data{pfcp_ctx = PNodeCtx} = Data) ->
     PCtx = #pfcp_ctx{
@@ -768,40 +772,52 @@ choose_up_ip(#node{ip = {_,_,_,_,_,_,_,_}}, #vrf{ipv4 = IP6})
 choose_up_ip(#node{ip = IP}, _VRF) ->
     IP.
 
-create_data_endp(PCtx, Node, VRFs) ->
+init_data_endp(Node, VRFs) ->
     [VRF|_] =
 	lists:filter(fun(#vrf{features = Features}) ->
 			     lists:member('CP-Function', Features)
 		     end, maps:values(VRFs)),
     IP = choose_up_ip(Node, VRF),
-    ergw_pfcp:make_data_endp(VRF#vrf.name, IP, PCtx).
+    {VRF#vrf.name, IP}.
 
-ctx_update_dp_ids(IEs, DataEndP, PCtx) ->
-    Acc0 = {DataEndP, PCtx},
-    Acc1 = ctx_update_dp_seid(IEs, Acc0),
-    _Acc = ctx_update_dp_pdrs(IEs, Acc1).
+create_data_endp({Name, IP} = _InitDataEndP, ChId, PCtx) ->
+    ergw_pfcp:make_data_endp(Name, {upf, ChId}, IP, PCtx).
+
+ctx_update_dp_ids(IEs, Data0) ->
+    Data1 = ctx_update_dp_seid(IEs, Data0),
+    _Data = ctx_update_dp_pdrs(IEs, Data1).
 
 ctx_update_dp_seid(#{f_seid := #f_seid{seid = DP}},
-		   {DataEndP, #pfcp_ctx{seid = SEID} = PCtx}) ->
-    {DataEndP, PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}}};
-ctx_update_dp_seid(_, Acc) ->
-    Acc.
+		   #data{pfcp_ctx = #pfcp_ctx{seid = SEID} = PCtx} = Data) ->
+    Data#data{pfcp_ctx = PCtx#pfcp_ctx{seid = SEID#seid{dp = DP}}};
+ctx_update_dp_seid(_, Data) ->
+    Data.
 
 ctx_update_dp_pdr(#created_pdr{group = #{pdr_id := #pdr_id{id = Id},
 					 f_teid := #f_teid{teid = TEID,
 							   ipv4 = IP4, ipv6 = IP6} = FqTEID}},
-		  {DataEndP0, PCtx0})
+		  #data{pfcp_ctx = PCtx0, upf_data_endp = DataEndPs0} = Data)
   when is_integer(TEID) ->
+    {VRF, _} = ergw_pfcp:get_id_name(pdr, Id, PCtx0),
+    DataEndP0 = maps:get(VRF, DataEndPs0),
     IP = case DataEndP0 of
 	     #gtp_endp{ip = v4} when is_binary(IP4) -> IP4;
 	     #gtp_endp{ip = v6} when is_binary(IP6) -> IP6;
-	     #gtp_endp{ip = DpIP} when DpIP =:= IP4 orelse DpIP =:= IP6 -> DpIP
+	     #gtp_endp{ip = DpIP} when is_tuple(DpIP) andalso
+				       size(DpIP) =:= 4 andalso
+				       is_binary(IP4) ->
+		 IP4;
+	     #gtp_endp{ip = DpIP} when is_tuple(DpIP) andalso
+				       size(DpIP) =:= 8 andalso
+				       is_binary(IP6) ->
+		 IP6
 	 end,
     DataEndP = DataEndP0#gtp_endp{ip = ergw_inet:bin2ip(IP), teid = TEID},
+    DataEndPs = maps:put(VRF, DataEndP, DataEndPs0),
     PCtx = ergw_pfcp:update_teids(Id, FqTEID, PCtx0),
-    {DataEndP, PCtx};
-ctx_update_dp_pdr(_, Acc) ->
-    Acc.
+    Data#data{pfcp_ctx = PCtx, upf_data_endp = DataEndPs};
+ctx_update_dp_pdr(_, Data) ->
+    Data.
 
 ctx_update_dp_pdrs(#{created_pdr := #created_pdr{} = PDR}, Acc) ->
     ctx_update_dp_pdr(PDR, Acc);
@@ -810,14 +826,17 @@ ctx_update_dp_pdrs(#{created_pdr := PDRs}, Acc) when is_list(PDRs) ->
 ctx_update_dp_pdrs(_, Acc) ->
     Acc.
 
-gen_pfcp_rules(_Key, #vrf{features = Features} = VRF, DataEndP, Acc) ->
-    lists:foldl(gen_per_feature_pfcp_rule(_, VRF, DataEndP, _), Acc, Features).
+gen_pfcp_rules(_Key, #vrf{features = Features} = VRF, InitDataEndP, Acc) ->
+    lists:foldl(gen_per_feature_pfcp_rule(_, VRF, InitDataEndP, _), Acc, Features).
 
 gen_per_feature_pfcp_rule('Access', #vrf{name = Name} = VRF,
-			  DataEndP, PCtx0) ->
+			  InitDataEndP, {PCtx0, DataEndPs}) ->
     Key = {Name, 'Access'},
     {PdrId, PCtx1} = ergw_pfcp:get_id(pdr, Key, PCtx0),
-    {FarId, PCtx} = ergw_pfcp:get_id(far, Key, PCtx1),
+    {FarId, PCtx2} = ergw_pfcp:get_id(far, Key, PCtx1),
+    {ChId, PCtx3} = ergw_pfcp:get_id(teid, Key, PCtx2),
+
+    DataEndP = create_data_endp(InitDataEndP, ChId, PCtx0),
 
     %% GTP-U encapsulated packet from CP
     PDI = #pdi{
@@ -841,15 +860,16 @@ gen_per_feature_pfcp_rule('Access', #vrf{name = Name} = VRF,
 	     }
 	  ],
 
-    ergw_pfcp_rules:add(
-      [{pdr, PdrId, PDR},
-       {far, FarId, FAR}], PCtx);
+    PCtx = ergw_pfcp_rules:add(
+	     [{pdr, PdrId, PDR},
+	      {far, FarId, FAR}], PCtx3),
+    {PCtx, maps:put(Name, DataEndP, DataEndPs)};
 gen_per_feature_pfcp_rule('TDF-Source', #vrf{name = Name} = VRF,
-			  _DataEndP, PCtx0) ->
+			  _InitDataEndP, {PCtx0, DataEndPs}) ->
     Key = {tdf, Name},
     {PdrId, PCtx1} = ergw_pfcp:get_id(pdr, Key, PCtx0),
     {FarId, PCtx2} = ergw_pfcp:get_id(far, Key, PCtx1),
-    {UrrId, PCtx} = ergw_pfcp:get_urr_id(Key, [], Key, PCtx2),
+    {UrrId, PCtx3} = ergw_pfcp:get_urr_id(Key, [], Key, PCtx2),
 
     %% detect traffic from Access interface (TDF)
     PDI = #pdi{
@@ -875,21 +895,21 @@ gen_per_feature_pfcp_rule('TDF-Source', #vrf{name = Name} = VRF,
 	   #reporting_triggers{start_of_traffic = 1},
 	   #time_quota{quota = 60}],
 
-    ergw_pfcp_rules:add(
-      [{pdr, PdrId, PDR},
-       {far, FarId, FAR},
-       {urr, UrrId, URR}], PCtx);
-gen_per_feature_pfcp_rule(_, _VRF, _DpGtpIP, Acc) ->
+    PCtx = ergw_pfcp_rules:add(
+	     [{pdr, PdrId, PDR},
+	      {far, FarId, FAR},
+	      {urr, UrrId, URR}], PCtx3),
+    {PCtx, DataEndPs};
+gen_per_feature_pfcp_rule(_, _VRF, _InitDataEndP, Acc) ->
     Acc.
 
 install_cp_rules(#data{pfcp_ctx = PCtx0,
 		       cp = CntlNode,
 		       dp = #node{ip = DpNodeIP} = DpNode,
 		       vrfs = VRFs} = Data) ->
-    DataEndP = create_data_endp(PCtx0, DpNode, VRFs),
-
     PCtx1 = ergw_pfcp:init_ctx(PCtx0),
-    PCtx = maps:fold(gen_pfcp_rules(_, _, DataEndP, _), PCtx1, VRFs),
+    InitDataEndP = init_data_endp(DpNode, VRFs),
+    {PCtx, DataEndPs} = maps:fold(gen_pfcp_rules(_, _, InitDataEndP, _), {PCtx1, #{}}, VRFs),
     Rules = ergw_pfcp:update_pfcp_rules(PCtx1, PCtx, #{}),
     IEs = update_m_rec(ergw_pfcp:f_seid(PCtx, CntlNode), Rules),
 
@@ -897,7 +917,7 @@ install_cp_rules(#data{pfcp_ctx = PCtx0,
     Req = augment_mandatory_ie(Req0, Data),
     ergw_sx_socket:call(DpNodeIP, Req, response_cb(from_cp_rule)),
 
-    Data#data{pfcp_ctx = PCtx, upf_data_endp = DataEndP}.
+    Data#data{pfcp_ctx = PCtx, upf_data_endp = DataEndPs}.
 
 send_notify_up(Notify, NotifyUp) when is_list(NotifyUp) ->
     [Pid ! {Tag, Notify} || {Pid, Tag} <- NotifyUp, is_pid(Pid), is_reference(Tag)];
