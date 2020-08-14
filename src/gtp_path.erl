@@ -305,7 +305,7 @@ handle_event(cast,{handle_response, echo_request, _, #gtp{} = Msg}, State, Data)
     handle_recovery_ie(Msg, State#state{echo = idle}, Data);
 
 handle_event(cast,{handle_response, echo_request, _, _Msg}, State, Data) ->
-    path_restart(undefined, peer_state(down, State), Data, []);
+    path_restart(undefined, peer_state(down, State#state{echo = idle}), Data, []);
 
 handle_event(cast, down, State, Data) ->
     path_restart(undefined, peer_state(down, State), Data, []);
