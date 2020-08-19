@@ -77,7 +77,10 @@
 %%====================================================================
 
 start_link(Opts) ->
-    proc_lib:start_link(?MODULE, init, [Opts]).
+    R = proc_lib:start_link(?MODULE, init, [Opts]),
+    ct:pal("Sx Start: ~p", [R]),
+    R.
+    %% gen_server:start_link({local, ?SERVER}, ?MODULE, Opts, []).
 
 call(Peer, Msg, {_,_,_} = CbInfo) ->
     ?MODULE:call(Peer, ?T1, ?N1, Msg, CbInfo).
@@ -154,17 +157,22 @@ validate_option(Opt, Value) ->
 init(#{name := Name, node := Node, ip := IP,
        socket := GtpSocket, burst_size := BurstSize} = Opts) ->
     process_flag(trap_exit, true),
+    ct:pal("Init ~p", [?SERVER]),
 
     SocketOpts = maps:with(?SOCKET_OPTS, Opts),
     {ok, SendSocket} = make_sx_socket(IP, 0, SocketOpts),
     {ok, RecvSocket} = make_sx_socket(IP, 8805, SocketOpts),
 
-    register(?SERVER, self()),
+    R = register(?SERVER, self()),
+    ct:pal("Register: ~p", [R]),
 
+    %% proc_lib:init_ack(ok),
     proc_lib:init_ack({ok, self()}),
+    %% proc_lib:init_ack(Parent, {ok, self()}),
 
     GtpPort = #gtp_port{} =
 	ergw_socket_reg:waitfor('gtp-u', GtpSocket),
+    ct:pal("GtpPort: ~p", [GtpPort]),
 
     State = #state{
 	       send_socket = SendSocket,

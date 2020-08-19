@@ -55,6 +55,7 @@
 load_config(Config0) ->
     Config = validate_config(Config0),
     ergw:load_config(Config),
+    ct:pal("Start Sockets: ~p", [proplists:get_value(sockets, Config)]),
     lists:foreach(fun ergw:start_socket/1, proplists:get_value(sockets, Config)),
     maps:map(fun load_sx_node/2, proplists:get_value(nodes, Config)),
     lists:foreach(fun load_handler/1, proplists:get_value(handlers, Config)),

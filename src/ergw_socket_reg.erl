@@ -79,6 +79,7 @@ handle_death(_Pid, _Reason, State) ->
     State.
 
 handle_call({waitfor, Key}, From, #state{waitfor = WF} = State) ->
+    ct:pal("WaitFor: ~p ~p ~p", [Key, From, WF]),
     case ets:lookup(?SERVER, Key) of
 	[{Key, _Pid, Value}] ->
 	    {reply, Value, State};
@@ -94,6 +95,7 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 
 notify(Key, Value, #state{waitfor = WF0} = State) ->
+    ct:pal("Notify: ~p ~p ~p", [Key, Value, WF0]),
     case maps:take(Key, WF0) of
 	{From, WF} ->
 	    gen_server:reply(From, Value),

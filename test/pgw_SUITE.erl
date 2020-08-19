@@ -1335,6 +1335,8 @@ path_maintenance(Config) ->
 simple_session_request() ->
     [{doc, "Check simple Create Session, Delete Session sequence"}].
 simple_session_request(Config) ->
+    logger:set_primary_config(#{level => debug}),
+
     PoolId = [<<"pool-A">>, ipv4, "10.180.0.1"],
 
     ?match_metric(prometheus_gauge, ergw_local_pool_free, PoolId, 65534),

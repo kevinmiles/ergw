@@ -16,11 +16,17 @@
 start_link('gtp-c', Opts) ->
     ergw_gtp_c_socket:start_link(Opts);
 start_link('gtp-u', Opts) ->
-    ergw_gtp_u_socket:start_link(Opts);
+    ct:pal("Socket Start U (~p) ...", [Opts]),
+    R = (catch ergw_gtp_u_socket:start_link(Opts)),
+    ct:pal("Socket Start U: ~p", [R]),
+    R;
 start_link('pfcp', Opts) ->
     ergw_sx_socket:start_link(Opts);
 start_link('dhcp', Opts) ->
-    ergw_dhcp_socket:start_link(Opts).
+    ergw_dhcp_socket:start_link(Opts);
+start_link(Type, Opts) ->
+    ct:pal("Socket Start ~p ~p", [Type, Opts]),
+    ok.
 
 %%%===================================================================
 %%% Options Validation

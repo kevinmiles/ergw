@@ -45,7 +45,9 @@
 start_link(SocketOpts) ->
     Opts = [{hibernate_after, 5000},
 	    {spawn_opt,[{fullsweep_after, 16}]}],
-    gen_server:start_link(?MODULE, SocketOpts, Opts).
+    R = gen_server:start_link(?MODULE, SocketOpts, Opts),
+    ct:pal("U Socket: ~p", [R]),
+    R.
 
 send(#gtp_port{type = 'gtp-u'} = GtpPort, IP, Port, #gtp{} = Msg) ->
     cast(GtpPort, make_send_req(IP, Port, Msg));
@@ -83,6 +85,7 @@ init(#{name := Name, ip := IP, burst_size := BurstSize} = SocketOpts) ->
 		 restart_counter = RCnt
 		},
 
+    ct:pal("REgister: ~p", [{'gtp-u', Name, GtpPort}]),
     ergw_socket_reg:register('gtp-u', Name, GtpPort),
 
     State = #state{

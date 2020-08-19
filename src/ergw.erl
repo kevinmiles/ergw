@@ -89,6 +89,7 @@ load_config([_ | T]) ->
 %% Initialize a new PFCP, DHCP, GTPv1/v2-c or GTPv1-u socket
 %%
 start_socket({_Name, #{type := Type} = Opts}) ->
+    ct:pal("Start Socket: ~p ~p ~p", [_Name, Type, Opts]),
     ergw_socket_sup:new(Type, Opts).
 
 %%
