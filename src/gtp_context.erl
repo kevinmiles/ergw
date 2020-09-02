@@ -119,6 +119,7 @@ remote_context_update(OldContext, NewContext)
     gtp_context_reg:update(Delete, Insert, ?MODULE, self()).
 
 delete_context(Context) ->
+    ct:pal("Delete Context ~p", [Context]),
     gen_statem:call(Context, delete_context).
 
 trigger_delete_context(Context) ->
@@ -311,9 +312,11 @@ validate_aaa_attr_option(Key, Setting, Value, _Attr) ->
 %%====================================================================
 
 sx_report(RecordIdOrPid, Report) ->
+    ct:pal("Sx Report: ~p, ~p", [RecordIdOrPid, Report]),
     context_run(RecordIdOrPid, call, {sx, Report}).
 
 pfcp_timer(RecordIdOrPid, Time, Evs) ->
+    ct:pal("PFCP Timer: ~p, ~p, ~p", [RecordIdOrPid, Time, Evs]),
     context_run(RecordIdOrPid, call, {pfcp_timer, Time, Evs}).
 
 %% TEID handling for GTPv1 is brain dead....
@@ -370,17 +373,22 @@ callback_mode() -> [handle_event_function, state_enter].
 
 init([RecordId]) ->
     process_flag(trap_exit, true),
+    %% ct:pal("init from ~p", [RecordId]),
 
     case gtp_context_reg:register_name(RecordId, self()) of
 	yes ->
+	    %% ct:pal("register with ~p -> yes", [RecordId]),
 	    case ergw_context:get_context_record(RecordId) of
 		{ok, State, Data0} ->
+		    %% ct:pal("get_context_record ~p -> ~p, ~p", [RecordId, State, Data0]),
 		    Data = restore_session_state(Data0),
 		    {ok, #c_state{session = State, fsm = init}, Data};
 		Other ->
+		    %% ct:pal("get_context_record ~p -> ~p", [RecordId, Other]),
 		    {stop, Other}
 	    end;
 	no ->
+	    %% ct:pal("register with ~p -> no", [RecordId]),
 	    Pid = gtp_context_reg:whereis_name(RecordId),
 	    {stop, {error, {already_started, Pid}}}
     end;
@@ -458,7 +466,9 @@ handle_event(state_timeout, idle, #c_state{fsm = init}, Data) ->
 handle_event(state_timeout, idle, #c_state{session = SState, fsm = idle}, Data0) ->
     Data = save_session_state(Data0),
     Meta = get_record_meta(Data),
+    %% ct:pal("Data.Session: ~p", [maps:get('Session', Data, undefined)]),
     ergw_context:put_context_record(SState, Meta, Data),
+    %% ct:pal("Nudsf all: ~p", [ergw_nudsf:all()]),
     {stop, normal, Data};
 
 handle_event(state_timeout, stop, #c_state{session = terminating} = State, Data) ->
@@ -476,6 +486,7 @@ handle_event(enter, OldState, State, #{interface := Interface} = Data) ->
 
 handle_event({call, From}, {sx, Report}, State,
 	    #{interface := Interface, pfcp := PCtx} = Data0) ->
+    ct:pal("~w: handle_call Sx: ~p", [?MODULE, Report]),
     ?LOG(debug, "~w: handle_call Sx: ~p", [?MODULE, Report]),
     case Interface:handle_sx_report(Report, State, Data0) of
 	{ok, Data} ->
@@ -550,12 +561,14 @@ handle_event(Type, Content, State, #{interface := Interface} = Data) ->
     Interface:handle_event(Type, Content, State, Data).
 
 terminate(Reason, State, #{interface := Interface} = Data) ->
+    ct:pal("Terminate: ~p", [State]),
     try
 	Interface:terminate(Reason, State, Data)
     after
 	terminate_cleanup(State, Data)
     end;
 terminate(_Reason, State, Data) ->
+    ct:pal("Terminate: ~p", [State]),
     terminate_cleanup(State, Data),
     ok.
 
@@ -647,8 +660,10 @@ generic_error(#request{gtp_port = GtpPort} = Request,
 %%%===================================================================
 
 terminate_cleanup(#c_state{session = State}, Data) when State =/= up ->
+    ct:pal("Clean Up State: ~p ~p", [State, Data]),
     ergw_context:delete_context_record(Data);
 terminate_cleanup(_State, _) ->
+    ct:pal("Non Clean Up State: ~p", [_State]),
     ok.
 
 register_request(Handler, Server, #request{key = ReqKey, gtp_port = GtpPort}) ->
@@ -711,6 +726,7 @@ validate_message(#gtp{version = Version, ie = IEs} = Msg, Data) ->
 		v1 -> gtp_v1_c:get_cause(IEs);
 		v2 -> gtp_v2_c:get_cause(IEs)
 	    end,
+    %%?LOG(error, "Msg: ~p", [Msg]),
     case validate_ies(Msg, Cause, Data) of
 	[] ->
 	    ok;

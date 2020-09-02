@@ -76,6 +76,7 @@ wait_pool_response(ReqId) ->
     end.
 
 release({_, Server, {IP, _}, Pool, _Opts}) ->
+    ct:pal("LocalRelease: ~p, ~p, ~p", [Server, IP, Pool]),
     %% see alloc_reply
     gen_server:cast(Server, {release, IP, Pool}).
 

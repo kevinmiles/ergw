@@ -716,6 +716,9 @@ create_pdp_context_request_missing_ie(Config) ->
     MetricsAfter = socket_counter_metrics(),
     ?equal([], outstanding_requests()),
 
+    %%ok = meck:wait(gtp_context, terminate, '_', ?TIMEOUT),
+    %%ct:sleep(?TIMEOUT),
+    %%ct:pal("H: ~p", [meck:history(gtp_context)]),
     ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
     wait4contexts(?TIMEOUT),
 
@@ -1068,7 +1071,9 @@ long_pdp_context_request(Config) ->
     ?match_metric(prometheus_gauge, ergw_local_pool_free, PoolId, ?IPv4PoolSize - 1),
     ?match_metric(prometheus_gauge, ergw_local_pool_used, PoolId, 1),
 
+    ct:pal("wait for terminate...."),
     ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
+    ct:pal("....terminated."),
     ?equal(1, active_contexts()),
     meck:reset(?HUT),
 
@@ -1435,7 +1440,9 @@ ms_info_change_notification_request_invalid_imsi(Config) ->
     {GtpC1, _, _} = create_pdp_context(Config),
     {GtpC2, _, _} = ms_info_change_notification(invalid_imsi, GtpC1),
     ?equal([], outstanding_requests()),
-    delete_pdp_context(GtpC2),
+    ct:pal("GtpC2: ~p", [GtpC2]),
+    R = delete_pdp_context(GtpC2),
+    ct:pal("R: ~p", [R]),
 
     ok = meck:wait(?HUT, terminate, '_', ?TIMEOUT),
     meck_validate(Config),
@@ -1597,6 +1604,7 @@ session_options() ->
 session_options(Config) ->
     {GtpC, _, _} = create_pdp_context(ipv4v6, Config),
 
+    ct:pal("T: ~p", [ergw_api:tunnel(all)]),
     [#{'Process' := Pid}|_] = ergw_api:tunnel(all),
     #{'Session' := Session} = gtp_context:info(Pid),
 
@@ -1741,6 +1749,7 @@ gy_validity_timer(Config) ->
     ct:sleep({seconds, 10}),
     delete_pdp_context(GtpC),
 
+    ct:pal("H: ~p", [meck:history(?HUT)]),
     ?match(X when X >= 3 andalso X < 10,
 		  meck:num_calls(?HUT, handle_event, [info, {pfcp_timer, '_'}, '_', '_'])),
 
@@ -1954,6 +1963,7 @@ simple_ofcs(Config) ->
     ergw_test_sx_up:usage_report('pgw-u01', PCtx, MatchSpec, ReportFun),
 
     ct:sleep(100),
+    ct:pal("Delete PDP Context: ~p", [GtpC]),
     delete_pdp_context(GtpC),
 
     H = meck:history(ergw_aaa_session),
@@ -2238,6 +2248,7 @@ gy_ccr_asr_overlap(Config) ->
     ok = meck:expect(ergw_aaa_session, invoke,
 		     fun(MSession, MSessionOpts, {gy, 'CCR-Terminate'} = Procedure, Opts) ->
 			     ct:pal("AAAReq: ~p", [AAAReq]),
+			     ct:pal("Self: ~p, Server: ~p", [self(), Server]),
 			     self() ! AAAReq,
 			     meck:passthrough([MSession, MSessionOpts, Procedure, Opts]);
 			(MSession, MSessionOpts, Procedure, Opts) ->

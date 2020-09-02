@@ -1937,6 +1937,7 @@ allocate_ips(AllocInfo,
 
 %% release_context_ips/1
 release_context_ips(#context{ms_v4 = MSv4, ms_v6 = MSv6} = Context) ->
+    ct:pal("Release: ~p, ~p", [MSv4, MSv6]),
     ergw_ip_pool:release([MSv4, MSv6]),
     Context#context{ms_v4 = undefined, ms_v6 = undefined}.
 

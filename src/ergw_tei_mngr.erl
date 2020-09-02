@@ -128,7 +128,7 @@ load_data(State, #data{node_id = NodeId, block_id = BlockId} = Data) ->
     catch
 	Class:Error ->
 	    ?LOG(warning, "loading TEI manager state failed with ~p:~p", [Class, Error]),
-	    create_data(State, Data),
+	    (catch create_data(State, Data)),
 	    {State, Data}
     end.
 

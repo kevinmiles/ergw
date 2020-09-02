@@ -538,6 +538,7 @@ contexts_at_scale(TargetRate, NProcs, NCtx, Config) ->
     send_recv_pdu(GtpC0, Echo),
 
     wait4tunnels(?TIMEOUT),
+    %%?equal(0, active_contexts()),
     ct:sleep({seconds, 30}),
     ergw_nudsf:wipe(),
 

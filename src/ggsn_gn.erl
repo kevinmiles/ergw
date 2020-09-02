@@ -108,11 +108,14 @@ handle_event(enter, _OldState, _State, _Data) ->
     keep_state_and_data;
 
 handle_event({call, From}, delete_context, #c_state{session = up} = State, Data) ->
+    ct:pal("Delete Context #1"),
     delete_context(From, administrative, State, Data);
 handle_event({call, From}, delete_context, #c_state{session = State}, _Data)
   when State =:= shutdown; State =:= terminating ->
+    ct:pal("Delete Context #2"),
     {keep_state_and_data, [{reply, From, {ok, ok}}]};
 handle_event({call, _From}, delete_context, _State, _Data) ->
+    ct:pal("Delete Context #3"),
     {keep_state_and_data, [postpone]};
 
 handle_event({call, From}, terminate_context, State, Data) ->
@@ -285,7 +288,9 @@ handle_pdu(ReqKey, #gtp{ie = PDU} = Msg, _State,
 handle_sx_report(#pfcp{type = session_report_request,
 		       ie = #{report_type := #report_type{erir = 1}}},
 	    _State, Data) ->
-    close_pdp_context(normal, Data),
+    ct:pal("ERIR"),
+    R = (catch close_pdp_context(normal, Data)),
+    ct:pal("R: ~p", [R]),
     {shutdown, Data};
 
 %% User Plane Inactivity Timer expired

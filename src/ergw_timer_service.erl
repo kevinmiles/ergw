@@ -55,9 +55,11 @@ handle_call({apply, Id, MF, OldTimesAndEvs, NewTimesAndEvs}, _From,
     maps:fold(
       fun(Time, Evs, _) -> ets:insert(TID, {{Time, Id}, Evs}) end, ok, NewTimesAndEvs),
     State = State0#state{ids = Ids#{Id => {MF, NewTimesAndEvs}}},
+    ct:pal("Apply Ids: ~p", [State#state.ids]),
     {reply, ok, State, next_timeout(State)};
 
 handle_call({cancel, Id}, _From, #state{tid = TID, ids = Ids} = State0) ->
+    ct:pal("Cancel Id ~p Ids: ~p", [Id, Ids]),
     case Ids of
 	#{Id := {_, TimesAndEvs}} ->
 	    maps:fold(
@@ -102,6 +104,7 @@ exec_timeout({Time, Id} = Key, #state{tid = TID, ids = Ids} = State) ->
     [{_, Evs}] = ets:take(TID, Key),
     {MF, TimesAndEvs0} = maps:get(Id, Ids),
     {Evs, TimesAndEvs} = maps:take(Time, TimesAndEvs0),
+    ct:pal("Exec Id ~p Ids: ~p", [Id, Ids]),
     apply_timeout(MF, Id, Time, Evs),
     case maps:size(TimesAndEvs) of
 	0 ->

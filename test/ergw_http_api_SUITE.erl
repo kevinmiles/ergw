@@ -202,6 +202,7 @@ http_api_status_req(_Config) ->
     {ok, {_, _, Body}} = httpc:request(get, {URL, []},
 				       [], [{body_format, binary}]),
     Response = jsx:decode(Body, [return_maps]),
+    ct:pal("Body: ~p~nResponse: ~p~n", [Body, Response]),
     ?equal(maps:get(accept_new, SysInfo), maps:get(<<"acceptNewRequests">>, Response)),
     ?equal(maps:get(node_id, SysInfo), maps:get(<<"nodeId">>, Response)),
     {Mcc, Mnc} = maps:get(plmn_id, SysInfo),

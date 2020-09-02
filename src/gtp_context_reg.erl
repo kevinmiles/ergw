@@ -114,17 +114,21 @@ handle_call({register_name, Name, Pid}, _From, State) ->
 	true ->
 	    link(Pid),
 	    Keys = ordsets:add_element(Name, get_pid(Pid, State)),
+	    %%ct:pal("Keys Old: ~p~nNew: ~p", [get_pid(Pid, State), Keys]),
 	    {reply, yes, update_pid(Pid, Keys, State)};
 	_ ->
 	    {reply, no, State}
     end;
 
 handle_call({unregister_name, Name}, _From, State) ->
+    ct:pal("unregister_name: ~p", [Name]),
     case ets:take(?SERVER, Name) of
 	[{Name, Pid}] ->
+	    ct:pal("unregister_name ok: ~p", [Pid]),
 	    unlink(Pid),
 	    {reply, ok, delete_pid(Pid, State)};
-	_ ->
+	_Other ->
+	    ct:pal("unregister_name failk: ~p", [_Other]),
 	    {reply, ok, State}
     end;
 
@@ -166,9 +170,11 @@ handle_call({await_unreg, Pid}, From, #state{pids = Pids, await_unreg = AWait} =
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, _Reason}, State0) ->
+handle_info({'EXIT', Pid, _Reason} = Exit, State0) ->
     Keys = get_pid(Pid, State0),
+    %% ct:pal("EXIT: ~p~nkeys: ~p", [Exit, Keys]),
     State = delete_keys(Keys, Pid, State0),
+    %% ct:pal("All: ~p", [ets:tab2list(?SERVER)]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->

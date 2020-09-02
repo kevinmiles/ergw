@@ -45,6 +45,7 @@ handler(gtp) -> gtp_context;
 handler(tdf) -> tdf.
 
 sx_report(#pfcp{type = session_report_request, seid = SEID} = Report) ->
+    ct:pal("SxReport #1: ~p (~p)", [Report, SEID]),
     apply2context(sx, [#seid_key{seid = SEID}], sx_report, [Report]).
 
 %% port_message/2
@@ -56,6 +57,7 @@ port_message(Request, Msg) ->
 port_message(Keys0, #request{gtp_port = GtpPort} = Request, Msg)
   when is_list(Keys0) ->
     Keys = [gtp_context:port_key(GtpPort, Key) || Key <- Keys0],
+    %% ct:pal("Keys: ~p~nNudf: ~p", [Keys, ergw_nudsf:all()]),
     apply2context(gtp, Keys, port_message, [Request, Msg, false]).
 
 %% port_message/4
@@ -63,6 +65,7 @@ port_message(Key, Request, Msg, Resent) ->
     apply2context(gtp, [Key], port_message, [Request, Msg, Resent]).
 
 pfcp_timer(Id, Time, Evs) ->
+    ct:pal("PfcpTimer #1: ~p", [Id]),
     apply2context(gtp, [Id], pfcp_timer, [Time, Evs]).
 
 %%%===================================================================
@@ -129,8 +132,11 @@ apply2handler(M, F, A) ->
     end.
 
 apply2local(Type, Keys, F, A) ->
+    ct:pal("Keys: ~p~nContextReg: ~p~nSelect: ~p",
+	   [Keys, gtp_context_reg:all(), (catch select_context(Keys))]),
     case select_context(Keys) of
 	{Handler, Pid} ->
+	    ct:pal("apply(~p)", [[Handler, F, [Pid] ++ A]]),
 	    apply2handler(Handler, F, [Pid] ++ A);
 	_ ->
 	    ?LOG(debug, "unable to find context in cache ~p", [Keys]),
@@ -138,12 +144,19 @@ apply2local(Type, Keys, F, A) ->
     end.
 
 apply2context(Type, Keys, F, A) ->
+    ct:pal("Keys: ~p~nContextReg: ~p~nSelect: ~p",
+	   [Keys, gtp_context_reg:all(), (catch select_context(Keys))]),
     case apply2local(Type, Keys, F, A) of
 	{error, not_found} ->
 	    ?LOG(debug, "unable to find context in cache ~p", [Keys]),
 	    Filter = filter(Keys),
+	    ct:pal("Filter: ~p~nNudf: ~p~nSearch: ~p",
+		   [Filter, ergw_nudsf:all(), (catch ergw_nudsf:search(Filter))]),
+	    ct:pal("Filter: ~p~nSearch: ~p",
+		   [Filter, (catch ergw_nudsf:search(Filter))]),
 	    case ergw_nudsf:search(Filter) of
 		{1, [RecordId]} ->
+		    ct:pal("apply: ~p", [[handler(Type), F, [RecordId] ++ A]]),
 		    apply2handler(handler(Type), F, [RecordId] ++ A);
 		OtherNudsf ->
 		    ?LOG(debug, "unable to find context ~p -> ~p", [Filter, OtherNudsf]),

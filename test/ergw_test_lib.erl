@@ -203,6 +203,7 @@ meck_init(Config) ->
 			     end
 		     end),
     ok = meck:new(ergw_proxy_lib, [passthrough, no_link]),
+    %%ok = meck:new(gtp_context, [passthrough, no_link]),
 
     {_, Hut} = lists:keyfind(handler_under_test, 1, Config),   %% let it crash if HUT is undefined
     ok = meck:new(Hut, [passthrough, no_link, non_strict]),
@@ -222,6 +223,7 @@ meck_reset(Config) ->
     meck:reset(ergw_aaa_session),
     meck:reset(ergw_gsn_lib),
     meck:reset(ergw_proxy_lib),
+    %%meck:reset(gtp_context),
     meck:reset(proplists:get_value(handler_under_test, Config)).
 
 meck_unload(Config) ->
@@ -230,6 +232,7 @@ meck_unload(Config) ->
     meck:unload(ergw_aaa_session),
     meck:unload(ergw_gsn_lib),
     meck:unload(ergw_proxy_lib),
+    %%meck:unload(gtp_context),
     meck:unload(proplists:get_value(handler_under_test, Config)).
 
 meck_validate(Config) ->
@@ -238,6 +241,7 @@ meck_validate(Config) ->
     ?equal(true, meck:validate(ergw_aaa_session)),
     ?equal(true, meck:validate(ergw_gsn_lib)),
     ?equal(true, meck:validate(ergw_proxy_lib)),
+    %%?equal(true, meck:validate(gtp_context)),
     ?equal(true, meck:validate(proplists:get_value(handler_under_test, Config))).
 
 %%%===================================================================
@@ -578,6 +582,7 @@ wait4contexts(Cnt) ->
 		    ct:sleep(100),
 		    wait4contexts(Cnt - 100);
 	       true ->
+		    ct:pal("All: ~p", [ergw_nudsf:all()]),
 		    ct:fail("timeout, waiting for contexts to be deleted, left over ~p", [Other])
 	    end
     end.
