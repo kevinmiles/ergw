@@ -109,7 +109,8 @@ handle_event(enter, _OldState, _State, _Data) ->
 
 handle_event({call, From}, delete_context, #c_state{session = up} = State, Data) ->
     delete_context(From, administrative, State, Data);
-handle_event({call, From}, delete_context, #c_state{session = shutdown}, _Data) ->
+handle_event({call, From}, delete_context, #c_state{session = State}, _Data)
+  when State =:= shutdown; State =:= terminating ->
     {keep_state_and_data, [{reply, From, {ok, ok}}]};
 handle_event({call, _From}, delete_context, _State, _Data) ->
     {keep_state_and_data, [postpone]};
@@ -500,8 +501,10 @@ handle_response({From, TermCause},
     end,
     gtp_context:next_state_shutdown(State, Data#{context := Context}).
 
-terminate(_Reason, _State, #{context := Context}) ->
+terminate(_Reason, #c_state{session = State}, #{context := Context}) when State =/= up ->
     ergw_gsn_lib:release_context_ips(Context),
+    ok;
+terminate(_Reason, _State, _Data) ->
     ok.
 
 %%%===================================================================
@@ -1106,7 +1109,7 @@ delete_context(From, TermCause, State, #{context := Context} = Data) ->
 		   #teardown_ind{value = 1}],
     RequestIEs = gtp_v1_c:build_recovery(Type, Context, false, RequestIEs0),
     send_request(Context, ?T3, ?N3, Type, RequestIEs, {From, TermCause}),
-    gtp_context:next_state_shutdown(State, Data).
+    gtp_context:next_state_terminating(State, Data).
 
 allocate_ips(APNOpts, SOpts, EUA, DAF, Context) ->
     ergw_gsn_lib:allocate_ips(pdp_alloc(EUA), APNOpts, SOpts, DAF, Context).

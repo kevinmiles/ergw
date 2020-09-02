@@ -33,7 +33,8 @@
 -export([gtpc_server_init/2]).
 -export([pretty_print/1]).
 -export([set_cfg_value/3, add_cfg_value/3]).
--export([outstanding_requests/0, wait4tunnels/1, active_contexts/0, hexstr2bin/1]).
+-export([outstanding_requests/0, wait4tunnels/1, wait4contexts/1,
+	 active_contexts/0, hexstr2bin/1]).
 -export([match_metric/7, get_metric/4]).
 -export([has_ipv6_test_config/0]).
 -export([query_usage_report/2]).
@@ -566,6 +567,18 @@ wait4tunnels(Cnt) ->
 		    wait4tunnels(Cnt - 100);
 	       true ->
 		    ct:fail("timeout, waiting for tunnels to terminate, left over ~p", [Other])
+	    end
+    end.
+
+wait4contexts(Cnt) ->
+    case ergw_nudsf:search(#{tag => type, value => 'gtp-c'}, #{count => true}) of
+	{0, _} -> ok;
+	Other ->
+	    if Cnt > 100 ->
+		    ct:sleep(100),
+		    wait4contexts(Cnt - 100);
+	       true ->
+		    ct:fail("timeout, waiting for contexts to be deleted, left over ~p", [Other])
 	    end
     end.
 

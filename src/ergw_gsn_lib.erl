@@ -72,6 +72,7 @@
 
 delete_sgi_session(Reason, Ctx, PCtx)
   when Reason /= upf_failure ->
+    ergw_pfcp:cancel_timers(PCtx),
     Req = #pfcp{version = v1, type = session_deletion_request, ie = []},
     case ergw_sx_node:call(PCtx, Req, Ctx) of
 	#pfcp{type = session_deletion_response,
@@ -83,7 +84,8 @@ delete_sgi_session(Reason, Ctx, PCtx)
 			  [_Other]),
 	    undefined
     end;
-delete_sgi_session(_Reason, _Context, _PCtx) ->
+delete_sgi_session(_Reason, _Context, PCtx) ->
+    ergw_pfcp:cancel_timers(PCtx),
     undefined.
 
 build_query_usage_report(Type, PCtx) ->
@@ -1067,13 +1069,13 @@ update_m_rec(Record, Map) when is_tuple(Record) ->
     maps:update_with(element(1, Record), [Record | _], [Record], Map).
 
 register_ctx_ids(Handler, #pfcp_ctx{seid = #seid{cp = SEID}}) ->
-    Keys = [{seid, SEID}],
+    Keys = [#seid_key{seid = SEID}],
     gtp_context_reg:register(Keys, Handler, self()).
 
 register_ctx_ids(Handler,
 		 #context{local_data_endp = LocalDataEndp},
 		 #pfcp_ctx{seid = #seid{cp = SEID}} = PCtx) ->
-    Keys = [{seid, SEID} |
+    Keys = [#seid_key{seid = SEID} |
 	    [ergw_pfcp:ctx_teid_key(PCtx, #fq_teid{ip = LocalDataEndp#gtp_endp.ip,
 						   teid = LocalDataEndp#gtp_endp.teid}) ||
 		is_record(LocalDataEndp, gtp_endp)]],

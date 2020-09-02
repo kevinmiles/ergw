@@ -12,6 +12,8 @@
 %% API
 -export([peer/1, tunnel/1, contexts/1, delete_contexts/1, memory/1]).
 
+-include("include/ergw.hrl").
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -36,8 +38,8 @@ tunnel(Port) when is_atom(Port) ->
     lists:foldl(fun collext_path_contexts/2, [], gtp_path_reg:all(Port)).
 
 contexts(all) ->
-    lists:usort([Pid || {{_Socket, {teid, 'gtp-c', _TEID}}, {_, Pid}}
-				       <- gtp_context_reg:all(), is_pid(Pid)]).
+    lists:usort([Pid || {#port_teid_key{type = 'gtp-c'}, {_, Pid}}
+			    <- gtp_context_reg:all(), is_pid(Pid)]).
 
 delete_contexts(Count) ->
     delete_contexts(contexts(all), Count).

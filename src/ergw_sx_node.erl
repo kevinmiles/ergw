@@ -199,8 +199,8 @@ init([Parent, Node, NodeSelect, IP4, IP6, NotifyUp]) ->
 	     },
 
     RegKeys =
-	[{CntlPortName, {teid, 'gtp-u', TEI}},
-	 {seid, SEID}],
+	[#port_teid_key{name = CntlPortName, type = 'gtp-u', teid = TEI},
+	 #seid_key{seid = SEID}],
     gtp_context_reg:register(RegKeys, ?MODULE, self()),
 
     Nodes = setup:get_env(ergw, nodes, #{}),

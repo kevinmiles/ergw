@@ -36,6 +36,7 @@ init([Config]) ->
     {ok, {{one_for_one, 5, 10},
 	  ergw_nudsf:get_childspecs(Config) ++
 	      [?CHILD(ergw_tei_mngr, worker, [3, 6]),
+	       ?CHILD(ergw_timer_service, worker, []),
 	       ?CHILD(gtp_path_reg, worker, []),
 	       ?CHILD(gtp_path_sup, supervisor, []),
 	       ?CHILD(gtp_context_reg, worker, []),

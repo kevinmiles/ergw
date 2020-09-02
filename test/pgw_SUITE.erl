@@ -1229,7 +1229,8 @@ path_failure() ->
 path_failure(Config) ->
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, CtxPid} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, CtxPid} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     #{context := Ctx1} = gtp_context:info(CtxPid),
     #context{control_port = CPort} = Ctx1,
 
@@ -2124,7 +2125,8 @@ delete_bearer_request(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     Self = self(),
@@ -2202,7 +2204,8 @@ delete_bearer_request_resend(Config) ->
 
     {_, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     Self = self(),
@@ -2841,7 +2844,8 @@ simple_aaa(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -2952,7 +2956,8 @@ simple_ofcs(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -3102,7 +3107,8 @@ ofcs_no_interim(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -3255,7 +3261,8 @@ simple_ocs() ->
 simple_ocs(Config) ->
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -3456,7 +3463,8 @@ split_charging1(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -3772,7 +3780,8 @@ split_charging2(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -4189,7 +4198,8 @@ tariff_time_change(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
 
@@ -4414,7 +4424,8 @@ gy_ccr_asr_overlap(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     #{'Session' := Session} = gtp_context:info(Server),
@@ -4547,7 +4558,8 @@ gx_rar_gy_interaction() ->
 gx_rar_gy_interaction(Config) ->
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     {ok, Session} = gtp_context:test_cmd(Server, session),
@@ -4743,7 +4755,8 @@ gx_asr(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     ResponseFun = fun(_, _, _, _) -> ok end,
@@ -4768,7 +4781,8 @@ gx_rar() ->
 gx_rar(Config) ->
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     #{'Session' := Session} = gtp_context:info(Server),
@@ -4896,7 +4910,8 @@ gy_asr(Config) ->
 
     {GtpC, _, _} = create_session(Config),
 
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
 
     ResponseFun = fun(_, _, _, _) -> ok end,
@@ -5197,7 +5212,8 @@ up_inactivity_timer(Config) ->
 	   end),
 
     create_session(Config),
-    {_Handler, Server} = gtp_context_reg:lookup({'irx-socket', {imsi, ?'IMSI', 5}}),
+    {_Handler, Server} =
+	gtp_context_reg:lookup(#port_key{name = 'irx-socket', key = {imsi, ?'IMSI', 5}}),
     true = is_pid(Server),
     {ok, PCtx} = gtp_context:test_cmd(Server, pfcp_ctx),
     [SER|_] = lists:filter(

@@ -28,16 +28,16 @@
 	 validate_options/3,
 	 validate_option/2,
 	 generic_error/3,
-	 port_key/2, port_teid_key/2,
-	 port_teid_filter/2]).
+	 port_key/2, port_teid_key/2]).
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
 -export([keep_state_idle/2, keep_state_idle/3,
 	 next_state_idle/2, next_state_idle/3,
+	 next_state_terminating/2,
 	 next_state_shutdown/2, next_state_shutdown/3]).
 
 %% ergw_context callbacks
--export([sx_report/2, port_message/2, port_message/4]).
+-export([sx_report/2, pfcp_timer/3, port_message/2, port_message/4]).
 
 %% gen_statem callbacks
 -export([callback_mode/0, init/1, handle_event/4,
@@ -199,6 +199,10 @@ test_cmd(Pid, Cmd) when is_pid(Pid) ->
 enforce_restrictions(Msg, #context{restrictions = Restrictions} = Context) ->
     lists:foreach(fun(R) -> enforce_restriction(Context, Msg, R) end, Restrictions).
 
+next_state_terminating(State, Data) ->
+    Actions = [{state_timeout, 5000, stop}],
+    {next_state, State#c_state{session = terminating, fsm = busy}, Data, Actions}.
+
 next_state_shutdown(State, Data) ->
     next_state_shutdown(State, Data, []).
 
@@ -305,8 +309,11 @@ validate_aaa_attr_option(Key, Setting, Value, _Attr) ->
 %% ergw_context API
 %%====================================================================
 
-sx_report(Server, Report) ->
-    gen_statem:call(Server, {sx, Report}).
+sx_report(RecordIdOrPid, Report) ->
+    context_run(RecordIdOrPid, call, {sx, Report}).
+
+pfcp_timer(RecordIdOrPid, Time, Evs) ->
+    context_run(RecordIdOrPid, call, {pfcp_timer, Time, Evs}).
 
 %% TEID handling for GTPv1 is brain dead....
 port_message(Request, #gtp{version = v2, type = MsgType, tei = 0} = Msg)
@@ -345,16 +352,14 @@ handle_port_message(Server, Request, Msg, Resent) when is_pid(Server) ->
     if not Resent -> register_request(?MODULE, Server, Request);
        true       -> ok
     end,
-    gen_statem:cast(Server, {handle_message, Request, Msg, Resent}).
+    gen_statem:call(Server, {handle_message, Request, Msg, Resent}).
 
-port_message(RecordId, Request, #gtp{type = g_pdu} = Msg, _Resent)
-  when is_binary(RecordId) ->
-    %%    gen_statem:cast(Server, {handle_pdu, Request, Msg});
-    context_run(RecordId, cast, {handle_pdu, Request, Msg});
-port_message(RecordId, Request, Msg, Resent)
-  when is_binary(RecordId) ->
+%% port_message/4
+port_message(RecordIdOrPid, Request, #gtp{type = g_pdu} = Msg, _Resent) ->
+    context_run(RecordIdOrPid, cast, {handle_pdu, Request, Msg});
+port_message(RecordIdOrPid, Request, Msg, Resent) ->
     EvFun = fun(Server, _) -> handle_port_message(Server, Request, Msg, Resent) end,
-    context_run(RecordId, EvFun, undefined).
+    context_run(RecordIdOrPid, EvFun, undefined).
 
 %%====================================================================
 %% gen_statem API
@@ -412,7 +417,7 @@ init([CntlPort, Version, Interface,
 
     case init_it(Interface, Opts, Data) of
 	{ok, {ok, #c_state{session = SState} = State, FinalData}} ->
-	    Meta = get_context_meta(Data),
+	    Meta = get_record_meta(Data),
 	    ergw_context:create_context_record(SState, Meta, FinalData),
 	    {ok, State, FinalData};
 	InitR ->
@@ -451,10 +456,12 @@ handle_event(state_timeout, idle, #c_state{fsm = init}, Data) ->
     {stop, normal, Data};
 handle_event(state_timeout, idle, #c_state{session = SState, fsm = idle}, Data0) ->
     Data = save_session_state(Data0),
-    ergw_context:put_context_record(SState, Data),
-    ct:pal("Nudsf all: ~p", [ergw_nudsf:all()]),
+    Meta = get_record_meta(Data),
+    ergw_context:put_context_record(SState, Meta, Data),
     {stop, normal, Data};
 
+handle_event(state_timeout, stop, #c_state{session = terminating} = State, Data) ->
+    next_state_shutdown(State, Data);
 handle_event(cast, stop, #c_state{session = shutdown}, _Data) ->
     {stop, normal};
 
@@ -482,7 +489,8 @@ handle_event({call, From}, {sx, Report}, State,
 	    keep_state_idle(State, Data)
     end;
 
-handle_event(cast, {handle_message, Request, #gtp{} = Msg0, Resent}, State, Data) ->
+handle_event({call, From}, {handle_message, Request, #gtp{} = Msg0, Resent}, State, Data) ->
+    gen_statem:reply(From, ok),
     Msg = gtp_packet:decode_ies(Msg0),
     ?LOG(debug, "handle gtp request: ~w, ~p",
 		[Request#request.port, gtp_c_lib:fmt_gtp(Msg)]),
@@ -519,6 +527,14 @@ handle_event(info, {update_session, Session, Events}, _State, _Data) ->
     ?LOG(debug, "SessionEvents: ~p~n       Events: ~p", [Session, Events]),
     Actions = [{next_event, internal, {session, Ev, Session}} || Ev <- Events],
     {keep_state_and_data, Actions};
+
+handle_event({call, From}, {pfcp_timer, Time, Evs} = Info, State,
+	    #{interface := Interface, pfcp := PCtx0} = Data) ->
+    ?LOG(debug, "handle_event ~p:~p", [Interface, Info]),
+    gen_statem:reply(From, ok),
+    PCtx = ergw_pfcp:timer_expired(Time, PCtx0),
+    CtxEvs = ergw_gsn_lib:pfcp_to_context_event(Evs),
+    Interface:handle_event(info, {pfcp_timer, CtxEvs}, State, Data#{pfcp => PCtx});
 
 handle_event(info, {timeout, TRef, pfcp_timer} = Info, State,
 	    #{interface := Interface, pfcp := PCtx0} = Data) ->
@@ -658,7 +674,9 @@ context_new(GtpPort, Version, Interface, InterfaceOpts) ->
 	    throw({error, Error})
     end.
 
-context_run(RecordId, EventType, EventContent) ->
+context_run(Pid, EventType, EventContent) when is_pid(Pid) ->
+    context_run_do(Pid, EventType, EventContent);
+context_run(RecordId, EventType, EventContent) when is_binary(RecordId) ->
     case gtp_context_reg:whereis_name(RecordId) of
 	Pid when is_pid(Pid) ->
 	    context_run_do(Pid, EventType, EventContent);
@@ -692,7 +710,6 @@ validate_message(#gtp{version = Version, ie = IEs} = Msg, Data) ->
 		v1 -> gtp_v1_c:get_cause(IEs);
 		v2 -> gtp_v2_c:get_cause(IEs)
 	    end,
-    ?LOG(error, "Msg: ~p", [Msg]),
     case validate_ies(Msg, Cause, Data) of
 	[] ->
 	    ok;
@@ -717,52 +734,53 @@ validate_ies(#gtp{version = Version, type = MsgType, ie = IEs}, Cause, #{interfa
 %% context registry
 %%====================================================================
 
-get_context_meta(#{context := Context}) ->
-    Tags = context2tags(Context),
+get_record_meta(#{context := Context} = Data) ->
+    Tags0 = context2tags(Context),
+    Tags = pfcp_tags(maps:get(pfcp, Data, undefined), Tags0),
     #{tags => Tags}.
 
+context2tag(dnn, #context{apn = APN}, Meta) when APN /= undefined ->
+    Meta#{dnn => APN};
+context2tag(ip_domain, #context{vrf = #vrf{name = VRF}}, Meta) ->
+    Meta#{ip_domain => VRF};
+context2tag(ms_ips, #context{ms_v4 = MSv4, ms_v6 = MSv6}, Meta)
+  when MSv4 /= undefined orelse MSv6 /= undefined ->
+    Meta#{ipv4 => MSv4, ipv6 => MSv6};
+context2tag(local_data_teid, #context{local_data_endp =
+					  #gtp_endp{ip = LocalDataIP,
+						    teid = LocalDataTEID}}, Meta) ->
+    Meta#{local_data_tei => LocalDataTEID,
+	  local_data_ip => LocalDataIP};
+context2tag(remote_control_teid, #context{remote_control_teid =
+				      #fq_teid{ip = RemoteIP,
+					       teid = RemoteCntlTEID}}, Meta) ->
+    Meta#{remote_control_tei => RemoteCntlTEID,
+	  remote_control_ip => RemoteIP};
+context2tag(remote_data_teid, #context{remote_data_teid =
+				   #fq_teid{ip = RemoteIP,
+					    teid = RemoteDataTEID}}, Meta) ->
+    Meta#{remote_data_tei => RemoteDataTEID,
+	  remote_data_ip => RemoteIP};
+context2tag(_, _, Meta) ->
+    Meta.
+
+pfcp_tags(#pfcp_ctx{seid = #seid{cp = SEID}}, Meta) ->
+    Meta#{seid => SEID};
+pfcp_tags(_, Meta) ->
+    Meta.
+
 context2tags(#context{
-		apn                 = APN,
 		context_id          = ContextId,
 		control_port        = #gtp_port{name = Name},
-		local_control_tei   = LocalCntlTEID,
-		remote_control_teid = RemoteCntlTEID,
-		vrf                 = #vrf{name = VRF},
-		ms_v4               = MSv4,
-		ms_v6               = MSv6
-	       }) ->
-    #{type => 'gtp-c',
-      port => Name,
-      local_control_tei => LocalCntlTEID,
-      remote_control_tei => RemoteCntlTEID,
-      context_id => ContextId,
-      dnn => APN,
-      ip_domain => VRF,
-      ipv4 => MSv4,
-      ipv6 => MSv6};
-context2tags(#context{
-		context_id          = ContextId,
-		control_port        = #gtp_port{name = Name},
-		local_control_tei   = LocalCntlTEID,
-		remote_control_teid = RemoteCntlTEID
-	       }) ->
-    #{type => 'gtp-c',
-      port => Name,
-      local_control_tei => LocalCntlTEID,
-      remote_control_tei => RemoteCntlTEID,
-      context_id => ContextId}.
-
-port_teid_filter(#gtp_port{type = Type} = Port, TEI) ->
-    port_teid_filter(Port, Type, TEI).
-
-port_teid_filter(#gtp_port{name = Name}, Type, TEI) ->
-    #{'cond' => 'AND',
-      units =>
-	  [
-	   #{tag => type, value => Type},
-	   #{tag => port, value => Name},
-	   #{tag => local_control_tei, value => TEI}
-	  ]}.
+		local_control_tei   = LocalCntlTEID
+	       } = Context) ->
+    Meta =
+	#{type => 'gtp-c',
+	  port => Name,
+	  local_control_tei => LocalCntlTEID,
+	  context_id => ContextId},
+    MetaF = [dnn, ip_domain, ms_ips, local_data_teid, remote_control_teid, remote_data_teid],
+    lists:foldl(fun(K, M) -> context2tag(K, Context, M) end, Meta, MetaF).
 
 context2keys(#context{
 		apn                 = APN,
@@ -793,13 +811,13 @@ context2keys(#context{
       ++ [port_key(CntlPort, ContextId) || ContextId /= undefined]).
 
 port_key(#gtp_port{name = Name}, Key) ->
-    {Name, Key}.
+    #port_key{name = Name, key = Key}.
 
 port_teid_key(#gtp_port{type = Type} = Port, TEI) ->
     port_teid_key(Port, Type, TEI).
 
 port_teid_key(#gtp_port{name = Name}, Type, TEI) ->
-    {Name, {teid, Type, TEI}}.
+    #port_teid_key{name = Name, type = Type, teid = TEI}.
 
 save_session_state(#{'Session' := Session} = Data)
   when is_pid(Session) ->
