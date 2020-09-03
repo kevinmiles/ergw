@@ -8,7 +8,8 @@
 -module(ergw_context).
 
 %% API
--export([sx_report/1, port_message/2, port_message/3, pfcp_timer/3,
+-export([port_message/2, port_message/3, port_message/4,
+	 sx_report/1, pfcp_timer/3,
 	 create_context_record/3,
 	 put_context_record/2, put_context_record/3,
 	 get_context_record/1,
@@ -56,6 +57,10 @@ port_message(Keys0, #request{gtp_port = GtpPort} = Request, Msg)
   when is_list(Keys0) ->
     Keys = [gtp_context:port_key(GtpPort, Key) || Key <- Keys0],
     apply2context(gtp, Keys, port_message, [Request, Msg, false]).
+
+%% port_message/4
+port_message(Key, Request, Msg, Resent) ->
+    apply2context(gtp, [Key], port_message, [Request, Msg, Resent]).
 
 pfcp_timer(Id, Time, Evs) ->
     apply2context(gtp, [Id], pfcp_timer, [Time, Evs]).
