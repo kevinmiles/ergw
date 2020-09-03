@@ -527,7 +527,7 @@ handle_request(#request{gtp_port = GtpPort, ip = SrcIP, port = SrcPort} = ReqKey
     send_request(GtpPort, SrcIP, SrcPort, ?T3, ?N3, Msg#gtp{seq_no = SeqNo}, undefined),
 
     Actions = context_idle_action([], Context),
-    gtp_context:keep_state_idle(State, Data, Actions);
+    gtp_context:keep_state_busy(State, Data, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = release_access_bearers_request} = Request, _Resent, State,

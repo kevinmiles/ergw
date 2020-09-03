@@ -32,6 +32,7 @@
 -export([usage_report_to_accounting/1,
 	 collect_charging_events/3]).
 -export([keep_state_idle/2, keep_state_idle/3,
+	 keep_state_busy/3,
 	 next_state_idle/2, next_state_idle/3,
 	 next_state_terminating/2,
 	 next_state_shutdown/2, next_state_shutdown/3]).
@@ -217,8 +218,8 @@ next_state_shutdown(State, Data, Actions) ->
 keep_state_idle(State, Data) ->
     keep_state_idle(State, Data, []).
 
-keep_state_idle(#c_state{session = up} = State, Data, Actions) ->
-    {next_state, State#c_state{fsm = idle}, Data, Actions};
+%% keep_state_idle(#c_state{session = up} = State, Data, Actions) ->
+%%     {next_state, State#c_state{fsm = idle}, Data, Actions};
 keep_state_idle(_State, Data, Actions) ->
     {keep_state, Data, Actions}.
 
@@ -230,10 +231,10 @@ next_state_idle(#c_state{session = up} = State, Data, Actions) ->
 next_state_idle(State, Data, Actions) ->
     {next_state, State, Data, Actions}.
 
-%% keep_state_busy(#c_state{session = up} = State, Data) ->
-%%     {next_state, State#c_state{fsm = busy}, Data};
-%% keep_state_busy(_State, Data) ->
-%%     {keep_state, Data}.
+keep_state_busy(#c_state{session = up} = State, Data, Actions) ->
+    {next_state, State#c_state{fsm = busy}, Data, Actions};
+keep_state_busy(_State, Data, Actions) ->
+    {keep_state, Data, Actions}.
 
 
 %%%===================================================================

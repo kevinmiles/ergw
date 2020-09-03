@@ -555,7 +555,7 @@ handle_request(#request{gtp_port = GtpPort, ip = SrcIP, port = SrcPort} = ReqKey
     send_request(GtpPort, SrcIP, SrcPort, ?T3, ?N3, Msg#gtp{seq_no = SeqNo}, ReqKey),
 
     Actions = context_idle_action([], Context),
-    gtp_context:keep_state_idle(State, Data, Actions);
+    gtp_context:keep_state_busy(State, Data, Actions);
 
 handle_request(ReqKey,
 	       #gtp{type = change_notification_request, ie = IEs} = Request,
@@ -652,7 +652,7 @@ handle_response(CommandReqKey,
     if Cause =:= request_accepted andalso BearerCause =:= request_accepted ->
 	    URRActions = update_session_from_gtp_req(IEs, Session, Context),
 	    trigger_defered_usage_report(URRActions, PCtx),
-	    gtp_context:keep_state_idle(State, Data);
+	    gtp_context:next_state_idle(State, Data);
        true ->
 	    ?LOG(error, "Update Bearer Request failed with ~p/~p",
 			[Cause, BearerCause]),
